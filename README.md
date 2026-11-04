@@ -79,6 +79,14 @@ git clone https://github.com/weircompute/weir-subnet && cd weir-subnet
 python3 -m venv .venv && .venv/bin/pip install -e '.[gpu]'
 ```
 
+PyTorch must match your NVIDIA driver. `pip` installs the newest PyTorch, which needs a recent driver; on an older one the GPU check fails with "The NVIDIA driver on your system is too old". Check the CUDA version your driver supports (top right of `nvidia-smi`) and install the matching build, for example for CUDA 12.4 (driver 550):
+
+```bash
+.venv/bin/pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+```
+
+The self-test in step 4 runs the same GPU check as the validator, so it shows this before you go live.
+
 **4. Self-test.** Runs the validator's own GPU check on every card, with the same sizes and time limits, and checks Docker, GPUs inside a container, Sysbox and your payout address. Fix every `FAIL` before going on:
 
 ```bash
