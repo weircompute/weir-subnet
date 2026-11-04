@@ -1,0 +1,56 @@
+"""Reason codes the validator records for every node and GPU.
+
+Miners see them in their status (`weir-node status`), so each one says what
+happened and what to do about it.
+"""
+
+OK = "OK"  # passed recently
+PENDING = "PENDING"  # seen, not challenged yet
+RENTED = "RENTED"  # in use by a tenant; keeps its last pass
+BUSY = "BUSY"  # a challenge was already running on it
+
+UNREACHABLE = "UNREACHABLE"  # no connection or timeout: check firewall, port, process
+BAD_SIGNATURE = "BAD_SIGNATURE"  # answer not signed by the registered hotkey: wrong hotkey on the node
+HTTP_ERROR = "HTTP_ERROR"  # node answered with an error
+FLEET_INVALID = "FLEET_INVALID"  # fleet entry does not match the node's own name, or too many nodes
+
+UNKNOWN_MODEL = "UNKNOWN_MODEL"  # GPU name and memory match no accepted model
+GPU_SET_CHANGED = "GPU_SET_CHANGED"  # GPUs differ from last time: every GPU is checked again
+DUPLICATE_GPU = "DUPLICATE_GPU"  # this GPU is already registered under another hotkey or node
+
+CHALLENGE_REFUSED = "CHALLENGE_REFUSED"  # node did not take the challenge
+CHALLENGE_SLOW = "CHALLENGE_SLOW"  # correct but slower than the model allows
+CHALLENGE_WRONG = "CHALLENGE_WRONG"  # wrong answer: miner scores 0 for 24 hours
+STRUCK = "STRUCK"  # miner is in its 24-hour zero period
+
+PRICE_OVER_CAP = "PRICE_OVER_CAP"  # price above the model's cap: no idle pay, not sold
+NO_PRICE_CAP = "NO_PRICE_CAP"  # no cap published for this model yet: no idle pay, not sold
+PROBATION = "PROBATION"  # verified, but not yet for the full waiting period
+NOT_ACTIVATED = "NOT_ACTIVATED"  # activation fee not paid (for the hotkey, or for this GPU): no idle pay, not sold
+DISK_TOO_SMALL = "DISK_TOO_SMALL"  # idle pay needs total disk >= 1.5x total VRAM
+NO_SYSBOX = "NO_SYSBOX"  # idle pay needs tenants to run under Sysbox
+
+
+EXPLAIN = {
+    OK: "passed recently; this GPU is being sold",
+    PENDING: "seen; waiting for its first check",
+    RENTED: "rented by a tenant; keeps its last pass",
+    BUSY: "a check was already running; tried again next round",
+    UNREACHABLE: "could not connect: check the process, port and firewall",
+    BAD_SIGNATURE: "answers are not signed by your registered hotkey: check --wallet/--hotkey on this machine",
+    HTTP_ERROR: "the node answered with an error: check its log",
+    FLEET_INVALID: "the fleet entry does not match this machine's --name, or the fleet is too large",
+    UNKNOWN_MODEL: "this GPU is not on the accepted list",
+    GPU_SET_CHANGED: "GPUs changed since last time: every GPU is checked again",
+    DUPLICATE_GPU: "this GPU is already registered elsewhere; only the first registration counts",
+    CHALLENGE_REFUSED: "the node did not take the check: check its log",
+    CHALLENGE_SLOW: "correct, but slower than this model must be: check power limits, clocks, other load",
+    CHALLENGE_WRONG: "wrong answer: your score is 0 for 24 hours",
+    STRUCK: "inside the 24-hour zero period after a wrong answer",
+    PRICE_OVER_CAP: "your price is above this model's cap: idle GPUs earn no idle pay and are not sold",
+    NO_PRICE_CAP: "no price cap is published for this model yet: idle GPUs earn no idle pay and are not sold",
+    PROBATION: "verified; idle pay starts once it has passed checks without a gap for the waiting period",
+    NOT_ACTIVATED: "no activation fee received for this GPU (or for any GPU of this hotkey): it earns no idle pay and is not sold",
+    DISK_TOO_SMALL: "total disk is under 1.5x total VRAM: idle GPUs earn no idle pay",
+    NO_SYSBOX: "tenants do not run under Sysbox (--docker-runtime sysbox-runc): idle GPUs earn no idle pay",
+}
