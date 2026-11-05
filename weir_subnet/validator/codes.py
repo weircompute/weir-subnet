@@ -29,6 +29,11 @@ PROBATION = "PROBATION"  # verified, but not yet for the full waiting period
 NOT_ACTIVATED = "NOT_ACTIVATED"  # activation fee not paid (for the hotkey, or for this GPU): no idle pay, not sold
 DISK_TOO_SMALL = "DISK_TOO_SMALL"  # idle pay needs total disk >= 1.5x total VRAM
 NO_SYSBOX = "NO_SYSBOX"  # idle pay needs tenants to run under Sysbox
+PENDING_REVIEW = "PENDING_REVIEW"  # did not pass, or not an accepted model: no pay unless a review decides otherwise
+DISPUTED = "DISPUTED"  # check result disputed and under review: counted for idle pay, not sold
+
+# Shown as PENDING_REVIEW (the original code stays in "reason").
+NEEDS_REVIEW = (UNKNOWN_MODEL, CHALLENGE_REFUSED, CHALLENGE_SLOW, CHALLENGE_WRONG)
 
 
 EXPLAIN = {
@@ -53,4 +58,6 @@ EXPLAIN = {
     NOT_ACTIVATED: "no activation fee received for this GPU (or for any GPU of this hotkey): it earns no idle pay and is not sold",
     DISK_TOO_SMALL: "total disk is under 1.5x total VRAM: idle GPUs earn no idle pay",
     NO_SYSBOX: "tenants do not run under Sysbox (--docker-runtime sysbox-runc): idle GPUs earn no idle pay",
+    PENDING_REVIEW: "did not pass the check, or is not an accepted model: it earns nothing; contact Weir for a review",
+    DISPUTED: "the check result is under review: counted for idle pay meanwhile, not listed for rent",
 }

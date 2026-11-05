@@ -99,6 +99,8 @@ On top of emissions, **rent goes to you**: what the renter paid, minus refunds a
 - Sysbox as the container runtime.
 - A node that answers at least half the time.
 
+Weir may review GPUs periodically. A reviewed GPU can earn before its probation ends, or while a check result is disputed; disputed GPUs are not listed for rent.
+
 **Network fund.** The reserve hotkey only receives what the rented and idle pools don't pay out. It pays for standby GPUs that keep popular cards available, renter credits and promotions that bring rentals to miners, and running the network (validators, payments, servers, this code). The more GPUs miners list, the smaller it gets.
 
 ---

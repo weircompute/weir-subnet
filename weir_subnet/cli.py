@@ -181,8 +181,11 @@ async def _miner_report(args) -> str:
     for node in miner.get("nodes", []):
         lines.append(f"{node['name']}: {node['code']} - {EXPLAIN.get(node['code'], '')} {node.get('detail') or ''}".rstrip())
         for gpu in node.get("gpus", []):
-            detail = f" ({gpu['detail']})" if gpu.get("detail") else ""
+            detail = ", ".join(x for x in (gpu.get("reason"), gpu.get("detail")) if x)
+            detail = f" ({detail})" if detail else ""
             lines.append(f"  GPU {gpu['index']} {gpu.get('model') or '?'}: {gpu['code']} - {EXPLAIN.get(gpu['code'], '')}{detail}")
+    for entry in miner.get("disputed", []):
+        lines.append(f"Under review: {entry['count']} x {entry['model']} ({entry['activated']} activated): {entry['code']} - {EXPLAIN.get(entry['code'], '')}")
     return "\n".join(lines)
 
 

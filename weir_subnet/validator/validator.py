@@ -34,10 +34,11 @@ from .chain import Chain, Neuron, Snapshot
 from .client import NodeClient, NodeError
 from . import codes
 from .models import MODELS, TIMING_OVERHEAD_S, TIMING_SLACK, classify, time_limit
-from .scoring import (STRIKE_SECONDS, VERIFIED_TTL, GpuRecord, MinerRecord, NodeRecord, Policy, RentalStats, compute_weights,
+from .scoring import (STRIKE_SECONDS, VERIFIED_TTL, GpuRecord, MinerRecord, NodeRecord, Policy, RentalStats, Review, compute_weights,
                       idle_gate, in_probation, price_gate)
 
 MAX_NODES_PER_MINER = 64
+MAX_DISPUTED_PER_MODEL = 64
 MAX_SCAN_BLOCKS = 600  # blocks of fee history read per round while catching up
 RAO_PER_TAO = 10**9
 
@@ -81,6 +82,8 @@ class Validator:
         self.fees_paid: dict[str, int] = {}  # coldkey -> rao sent to the fee address
         self.covered: dict[str, dict] = {}  # GPU uuid -> {hotkey, coldkey, rao}: activation fees spent, kept for good
         self.credit_left: dict[str, int] = {}  # coldkey -> unspent activation credit in rao, after the last round
+        # hotkey -> [(model key, weight, fee covered)] for disputed GPUs, this round
+        self.disputed: dict[str, list[tuple[str, float, bool]]] = {}
         self._load()
 
     # -- persistence -------------------------------------------------------
@@ -164,6 +167,22 @@ class Validator:
                 continue
         return out
 
+    def _reviews(self) -> dict[str, dict]:
+        """Manual review outcomes from the platform file, per hotkey:
+        {"skip_probation": bool, "disputed": {model key: GPU count}}."""
+        given = self._platform().get("reviews", {})
+        keys = {m.key for m in MODELS}
+        out = {}
+        for hotkey, entry in (given.items() if isinstance(given, dict) else ()):
+            if not isinstance(entry, dict):
+                continue
+            disputed = {}
+            for key, count in (entry.get("disputed") or {}).items() if isinstance(entry.get("disputed"), dict) else ():
+                if key in keys and isinstance(count, int) and not isinstance(count, bool) and count > 0:
+                    disputed[key] = min(count, MAX_DISPUTED_PER_MODEL)
+            out[str(hotkey)] = {"skip_probation": entry.get("skip_probation") is True, "disputed": disputed}
+        return out
+
     def _special(self, snapshot: Snapshot) -> set[str]:
         """Hotkeys that are not scored as ordinary miners."""
         return {h for h in (snapshot.owner_hotkey, self.keypair.ss58_address, self.config.reserve_hotkey) if h}
@@ -202,7 +221,10 @@ class Validator:
         through the platform. Credit goes to GPUs that passed a challenge,
         most valuable model first; a GPU once covered stays covered. A miner
         is in good standing while it has a covered GPU or credit for one."""
+        weights = self._per_model("weights")
+        disputed_wanted = {h: r["disputed"] for h, r in self._reviews().items() if h in self.miners and r["disputed"]}
         if not self.config.fee_address:
+            self.disputed = {h: [(k, weights[k], True) for k, n in d.items() for _ in range(n)] for h, d in disputed_wanted.items()}
             for record in self.miners.values():
                 record.fee_paid = True
                 for g in record.gpus.values():
@@ -232,10 +254,22 @@ class Validator:
                 credit[coldkey] = credit.get(coldkey, 0) - fee
                 self.covered[g.uuid] = {"hotkey": record.hotkey, "coldkey": coldkey, "rao": fee}
                 g.fee_covered = True
+        # Disputed GPUs take what credit is left, most valuable first, every
+        # round (they are not kept as covered: a review can change).
+        self.disputed = {}
+        wanted = sorted(((h, k) for h, d in disputed_wanted.items() for k, n in d.items() for _ in range(n)), key=lambda e: (-weights[e[1]], e[0]))
+        for hotkey, key in wanted:
+            coldkey = coldkey_of.get(hotkey)
+            fee = fees.get(key, 0)
+            ok = bool(coldkey) and credit.get(coldkey, 0) >= fee
+            if ok:
+                credit[coldkey] = credit.get(coldkey, 0) - fee
+            self.disputed.setdefault(hotkey, []).append((key, weights[key], ok))
         self.credit_left = credit
         for record in self.miners.values():
             coldkey = coldkey_of.get(record.hotkey)
             record.fee_paid = bool(coldkey) and (any(g.fee_covered for g in record.gpus.values())
+                                                 or any(ok for _, _, ok in self.disputed.get(record.hotkey, []))
                                                  or credit.get(coldkey, 0) >= cheapest)
 
     # -- one round ---------------------------------------------------------
@@ -250,6 +284,11 @@ class Validator:
         async with aiohttp.ClientSession() as session:
             await asyncio.gather(*(self._visit_miner(session, n) for n in miners))
         self._check_duplicates()
+        # Reviewed hotkeys are scored even without a node on chain.
+        uid_of = {n.hotkey: n.uid for n in snapshot.neurons if n.hotkey not in special}
+        for hotkey in self._reviews():
+            if hotkey in uid_of:
+                self.miners.setdefault(hotkey, MinerRecord(hotkey, uid_of[hotkey]))
         await self._scan_fees(snapshot)
         self._apply_fees(snapshot)
         self._save()
@@ -481,9 +520,16 @@ class Validator:
         policy = self.config.policy
         coldkey_of = {n.hotkey: n.coldkey for n in snapshot.neurons}
         fees = self._per_model("fees")
+        reviews = self._reviews()
         miners = {}
         for record in self.miners.values():
             struck = now < record.struck_until
+            skip = reviews.get(record.hotkey, {}).get("skip_probation", False)
+            disputed: dict[str, dict] = {}
+            for key, _w, ok in self.disputed.get(record.hotkey, []):
+                entry = disputed.setdefault(key, {"model": key, "count": 0, "activated": 0, "code": codes.DISPUTED})
+                entry["count"] += 1
+                entry["activated"] += int(ok)
             miners[record.hotkey] = {
                 "uid": record.uid,
                 "struck_until": int(record.struck_until) if struck else None,
@@ -497,17 +543,21 @@ class Validator:
                     "price_cap": caps.get(_model_of(record, n.name) or ""),
                     "availability": round(n.availability, 3),
                     "gpus": [{"index": g.index, "uuid": g.uuid, "model": g.model,
-                              "code": _fee_code(g, _gpu_code(g, now, policy)),
+                              "code": _fee_code(g, _gpu_code(g, now, policy, skip)),
+                              "reason": g.code if g.code in codes.NEEDS_REVIEW else None,
                               "detail": g.last_result, "verified_at": int(g.verified_at) or None,
-                              "idle_pay_from": int(g.verified_since + policy.probation_seconds) if g.verified_since else None}
+                              "idle_pay_from": (int(g.verified_since + policy.probation_seconds) if not skip else int(g.verified_since)) if g.verified_since else None}
                              for g in sorted(record.gpus.values(), key=lambda g: g.index) if g.node == n.name],
                 } for n in record.nodes.values()],
+                "disputed": list(disputed.values()),
             }
         self._write(path, {"generated_at": int(now), "block": snapshot.block, "activation_fees_tao": fees, "miners": miners})
 
     async def _set_weights(self, snapshot: Snapshot, now: float) -> dict[int, float]:
+        reviews = {h: Review(skip_probation=r["skip_probation"], disputed=[(k, w) for k, w, ok in self.disputed.get(h, []) if ok])
+                   for h, r in self._reviews().items()}
         weights, detail = compute_weights(list(self.miners.values()), self._rentals(), self._reserve_uid(snapshot), self.config.target_capacity, now,
-                                          self.config.policy, self._caps())
+                                          self.config.policy, self._caps(), reviews)
         try:
             await asyncio.to_thread(self.chain.set_weights, weights)
         except Exception as error:
@@ -543,9 +593,11 @@ def _fee_code(g: GpuRecord, code: str) -> str:
     return codes.NOT_ACTIVATED if not g.fee_covered and code in (codes.OK, codes.PROBATION) else code
 
 
-def _gpu_code(g: GpuRecord, now: float, policy: Policy) -> str:
+def _gpu_code(g: GpuRecord, now: float, policy: Policy, skip_probation: bool = False) -> str:
+    if g.code in codes.NEEDS_REVIEW:
+        return codes.PENDING_REVIEW
     if g.code != codes.OK or not g.model:
         return g.code
     if now - g.verified_at >= VERIFIED_TTL:
         return codes.PENDING  # its pass expired; checked again soon
-    return codes.PROBATION if in_probation(g, now, policy) else codes.OK
+    return codes.PROBATION if in_probation(g, now, policy) and not skip_probation else codes.OK

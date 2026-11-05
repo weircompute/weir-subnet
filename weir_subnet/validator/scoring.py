@@ -27,6 +27,11 @@ tenants, which shows up as refunds and penalties.
 A wrong challenge answer zeroes the miner in every pool for 24 hours and
 restarts its probation. A miner whose activation fee is unpaid earns nothing.
 
+Manual review (from the platform file) can end a miner's probation early,
+and can count GPUs whose check result is disputed: they earn idle pay at
+their model's weight, need their activation fee like any GPU, and are never
+listed for rent.
+
 Rentals of a GPU make the rented pool, not the idle pool, so renting your own
 GPU to yourself costs the platform fee and earns only a share of 20%.
 """
@@ -115,6 +120,15 @@ class RentalStats:
     delivery: float | None = None  # 0..1
 
 
+@dataclass
+class Review:
+    """Outcome of a manual review for one hotkey."""
+
+    skip_probation: bool = False
+    # Disputed GPUs whose activation fee is covered: (model key, weight).
+    disputed: list[tuple[str, float]] = field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class Policy:
     rented_share: float = 0.20
@@ -189,6 +203,7 @@ def compute_weights(
     now: float | None = None,
     policy: Policy = Policy(),
     caps: dict[str, float] | None = None,
+    reviews: dict[str, Review] | None = None,
 ) -> tuple[dict[int, float], dict[str, dict]]:
     """Returns ({uid: weight}, per-hotkey breakdown for the public summary)."""
     from . import codes
@@ -196,6 +211,7 @@ def compute_weights(
 
     now = time.time() if now is None else now
     caps = caps or {}
+    reviews = reviews or {}
     active = [m for m in miners if now >= m.struck_until and m.fee_paid]
 
     # Rented pool.
@@ -214,13 +230,16 @@ def compute_weights(
     # Idle pool: GPUs that pass the gates, counted per model for the caps.
     idle_gpus: dict[str, list[tuple[str, float]]] = {}  # hotkey -> [(model, weight)]
     for m in active:
+        review = reviews.get(m.hotkey, Review())
         for node in m.nodes.values():
             if idle_gate(node, m, policy, caps, now) != codes.OK:
                 continue
             for g in m.gpus.values():
                 if (g.node == node.name and g.model and g.fee_covered and g.code != codes.RENTED and now - g.verified_at < VERIFIED_TTL
-                        and not in_probation(g, now, policy)):
+                        and (review.skip_probation or not in_probation(g, now, policy))):
                     idle_gpus.setdefault(m.hotkey, []).append((g.model, g.weight))
+        for key, weight in review.disputed:
+            idle_gpus.setdefault(m.hotkey, []).append((key, weight))
     per_model: dict[str, int] = {}
     for gpus in idle_gpus.values():
         for key, _ in gpus:
@@ -241,6 +260,7 @@ def compute_weights(
             weights[m.uid] = weights.get(m.uid, 0.0) + w
         detail[m.hotkey] = {"uid": m.uid, "rented": round(rented.get(m.hotkey, 0.0), 6), "idle": round(idle.get(m.hotkey, 0.0), 6),
                             "idle_gpus": len(idle_gpus.get(m.hotkey, [])), "weight": round(w, 6),
+                            "disputed_gpus": len(reviews.get(m.hotkey, Review()).disputed),
                             "nodes": {n.name: idle_gate(n, m, policy, caps, now) for n in m.nodes.values()},
                             "struck": now < m.struck_until, "activated": m.fee_paid, "note": m.note}
     rest = max(0.0, 1.0 - sum(weights.values()))
