@@ -59,6 +59,8 @@ class GpuRecord:
     index: int = 0
     verified_since: float = 0.0  # start of the current run of passes without a gap
     fee_covered: bool = True  # this GPU's activation fee is paid (set every round when a fee applies)
+    fee_short_rao: int = 0  # activated as a cheaper model: what is still owed (set every round)
+    fee_due: float = 0.0  # when the activation is dropped if fee_short_rao is not paid
 
 
 @dataclass

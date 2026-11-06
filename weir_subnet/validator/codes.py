@@ -31,6 +31,7 @@ DISK_TOO_SMALL = "DISK_TOO_SMALL"  # idle pay needs total disk >= 1.5x total VRA
 NO_SYSBOX = "NO_SYSBOX"  # idle pay needs tenants to run under Sysbox
 PENDING_REVIEW = "PENDING_REVIEW"  # did not pass, or not an accepted model: no pay unless a review decides otherwise
 DISPUTED = "DISPUTED"  # check result disputed and under review: counted for idle pay, not sold
+FEE_SHORT = "FEE_SHORT"  # activated as a cheaper model than it reports now: no pay, not sold until the difference is paid
 
 # Shown as PENDING_REVIEW (the original code stays in "reason").
 NEEDS_REVIEW = (UNKNOWN_MODEL, CHALLENGE_REFUSED, CHALLENGE_SLOW, CHALLENGE_WRONG)
@@ -60,4 +61,6 @@ EXPLAIN = {
     NO_SYSBOX: "tenants do not run under Sysbox (--docker-runtime sysbox-runc): idle GPUs earn no idle pay",
     PENDING_REVIEW: "did not pass the check, or is not an accepted model: it earns nothing; contact Weir for a review",
     DISPUTED: "the check result is under review: counted for idle pay meanwhile, not listed for rent",
+    FEE_SHORT: ("this GPU was activated as a cheaper model than it reports now: it earns nothing and is not sold until the difference "
+                "is paid; if it is not paid in time, the activation is dropped and its waiting period starts again"),
 }

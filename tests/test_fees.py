@@ -81,3 +81,61 @@ def test_gpu_on_another_coldkey_is_not_covered(tmp_path):
     v.covered["g"] = {"hotkey": A, "coldkey": "cold-a", "rao": 10 * TAO}
     v._apply_fees(snap)
     assert not v.miners[B].gpus["g"].fee_covered
+
+
+
+def test_older_activations_without_a_model_are_not_rechecked(tmp_path):
+    v, snap = setup(tmp_path, {"cold-a": 3701 * TAO // 1000}, gpus_a=[gpu("g", "h100-80g", 4.0)])
+    v.covered["g"] = {"hotkey": A, "coldkey": "cold-a", "rao": 37 * TAO // 10}
+    v._apply_fees(snap, now=2000.0)
+    g = v.miners[A].gpus["g"]
+    assert g.fee_covered and g.fee_short_rao == 0
+
+
+def test_new_activations_record_the_model_and_switching_up_owes(tmp_path):
+    v, snap = setup(tmp_path, {"cold-a": 3701 * TAO // 1000}, gpus_a=[gpu("g", "rtx4090-24g", 1.0)])
+    v._apply_fees(snap, now=1000.0)
+    assert v.covered["g"]["model"] == "rtx4090-24g"
+    g = v.miners[A].gpus["g"]
+    g.model, g.weight = "h100-80g", 4.0
+    v._apply_fees(snap, now=2000.0)
+    assert not g.fee_covered and g.fee_short_rao == 63 * TAO // 10
+
+
+def test_a_marked_gpu_on_a_dearer_model_owes_the_difference(tmp_path):
+    from weir_subnet.validator.validator import TOP_UP_SECONDS
+
+    v, snap = setup(tmp_path, {"cold-a": 3701 * TAO // 1000}, gpus_a=[gpu("g", "h100-80g", 4.0)])
+    v.covered["g"] = {"hotkey": A, "coldkey": "cold-a", "rao": 37 * TAO // 10, "model": "rtx4090-24g"}
+    g = v.miners[A].gpus["g"]
+    v._apply_fees(snap, now=2000.0)
+    assert not g.fee_covered and not v.miners[A].fee_paid
+    assert g.fee_short_rao == 63 * TAO // 10 and g.fee_due == 2000.0 + TOP_UP_SECONDS
+    v._apply_fees(snap, now=2000.0 + 86400)
+    assert g.fee_due == 2000.0 + TOP_UP_SECONDS  # the deadline does not move
+    v.fees_paid["cold-a"] += 63 * TAO // 10
+    v._apply_fees(snap, now=3000.0)
+    assert g.fee_covered and g.fee_short_rao == 0 and v.covered["g"] == {"hotkey": A, "coldkey": "cold-a", "rao": 10 * TAO, "model": "h100-80g"}
+    assert v.miners[A].fee_paid and v.credit_left["cold-a"] == TAO // 1000
+
+
+def test_an_unpaid_difference_drops_the_activation_after_a_week(tmp_path):
+    from weir_subnet.validator.validator import TOP_UP_SECONDS
+
+    v, snap = setup(tmp_path, {"cold-a": 3701 * TAO // 1000}, gpus_a=[gpu("g", "h100-80g", 4.0)])
+    v.covered["g"] = {"hotkey": A, "coldkey": "cold-a", "rao": 37 * TAO // 10, "model": "rtx4090-24g"}
+    g = v.miners[A].gpus["g"]
+    v._apply_fees(snap, now=0.0)
+    assert not g.fee_covered and g.fee_short_rao
+    v._apply_fees(snap, now=TOP_UP_SECONDS)
+    assert "g" not in v.covered and not g.fee_covered and g.verified_since == 0.0
+    assert v.credit_left["cold-a"] == 3701 * TAO // 1000  # what was paid is credit again
+
+
+def test_same_or_cheaper_model_needs_nothing_more(tmp_path):
+    v, snap = setup(tmp_path, {"cold-a": 10 * TAO}, gpus_a=[gpu("g", "h100-80g", 4.0)])
+    v._apply_fees(snap, now=0.0)
+    g = v.miners[A].gpus["g"]
+    g.model, g.weight = "rtx4090-24g", 1.0
+    v._apply_fees(snap, now=10.0)
+    assert g.fee_covered and g.fee_short_rao == 0

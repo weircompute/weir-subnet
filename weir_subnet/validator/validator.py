@@ -41,6 +41,7 @@ MAX_NODES_PER_MINER = 64
 MAX_DISPUTED_PER_MODEL = 64
 MAX_SCAN_BLOCKS = 600  # blocks of fee history read per round while catching up
 RAO_PER_TAO = 10**9
+TOP_UP_SECONDS = 7 * 86400  # time to pay the difference after a GPU starts reporting a dearer model
 
 log = logging.getLogger("weir.validator")
 
@@ -80,7 +81,7 @@ class Validator:
         self.last_weights = 0.0
         self.fee_scanned_block = 0
         self.fees_paid: dict[str, int] = {}  # coldkey -> rao sent to the fee address
-        self.covered: dict[str, dict] = {}  # GPU uuid -> {hotkey, coldkey, rao}: activation fees spent, kept for good
+        self.covered: dict[str, dict] = {}  # GPU uuid -> {hotkey, coldkey, rao[, model, short_since]}: activation fees spent, kept for good
         self.credit_left: dict[str, int] = {}  # coldkey -> unspent activation credit in rao, after the last round
         # hotkey -> [(model key, weight, fee covered)] for disputed GPUs, this round
         self.disputed: dict[str, list[tuple[str, float, bool]]] = {}
@@ -215,12 +216,13 @@ class Validator:
             self.fees_paid[sender] = self.fees_paid.get(sender, 0) + int(rao)
         self.fee_scanned_block = end
 
-    def _apply_fees(self, snapshot: Snapshot) -> None:
+    def _apply_fees(self, snapshot: Snapshot, now: float | None = None) -> None:
         """Every listed GPU needs its own activation fee, set per model. Credit is
         TAO sent from a coldkey to the fee address plus what its hotkeys paid
         through the platform. Credit goes to GPUs that passed a challenge,
         most valuable model first; a GPU once covered stays covered. A miner
         is in good standing while it has a covered GPU or credit for one."""
+        now = time.time() if now is None else now
         weights = self._per_model("weights")
         disputed_wanted = {h: r["disputed"] for h, r in self._reviews().items() if h in self.miners and r["disputed"]}
         if not self.config.fee_address:
@@ -244,15 +246,19 @@ class Validator:
         for record in self.miners.values():
             coldkey = coldkey_of.get(record.hotkey)
             for g in record.gpus.values():
+                g.fee_short_rao, g.fee_due = 0, 0.0
                 entry = self.covered.get(g.uuid)
                 g.fee_covered = bool(coldkey and entry and entry["coldkey"] == coldkey)
+                if g.fee_covered and g.model:
+                    self._settle_model_change(g, entry, fees, credit, coldkey, now)
+                    entry = self.covered.get(g.uuid)
                 if coldkey and not entry and g.model and g.verified_since:
                     candidates.append((record, coldkey, g))
         for record, coldkey, g in sorted(candidates, key=lambda c: (-c[2].weight, c[0].uid, c[2].index)):
             fee = fees.get(g.model, 0)
             if credit.get(coldkey, 0) >= fee:
                 credit[coldkey] = credit.get(coldkey, 0) - fee
-                self.covered[g.uuid] = {"hotkey": record.hotkey, "coldkey": coldkey, "rao": fee}
+                self.covered[g.uuid] = {"hotkey": record.hotkey, "coldkey": coldkey, "rao": fee, "model": g.model}
                 g.fee_covered = True
         # Disputed GPUs take what credit is left, most valuable first, every
         # round (they are not kept as covered: a review can change).
@@ -271,6 +277,34 @@ class Validator:
             record.fee_paid = bool(coldkey) and (any(g.fee_covered for g in record.gpus.values())
                                                  or any(ok for _, _, ok in self.disputed.get(record.hotkey, []))
                                                  or credit.get(coldkey, 0) >= cheapest)
+
+    def _settle_model_change(self, g: GpuRecord, entry: dict, fees: dict[str, int], credit: dict[str, int], coldkey: str, now: float) -> None:
+        """Activations record the model paid for (older ones without it are left
+        as they are). A GPU
+        that now reports a model with a higher fee owes the difference. Credit
+        pays it when there is enough; otherwise the GPU is not covered, and
+        after TOP_UP_SECONDS the activation is dropped (what was paid goes back
+        to credit) and its waiting period starts again."""
+        if "model" not in entry:
+            return
+        owed = fees.get(g.model, 0) - int(entry["rao"])
+        if owed <= 0 or g.model == entry["model"]:
+            entry.pop("short_since", None)
+            return
+        if credit.get(coldkey, 0) >= owed:
+            credit[coldkey] -= owed
+            entry.update(rao=int(entry["rao"]) + owed, model=g.model)
+            entry.pop("short_since", None)
+            return
+        since = entry.setdefault("short_since", now)
+        g.fee_covered = False
+        if now - since >= TOP_UP_SECONDS:
+            del self.covered[g.uuid]
+            credit[coldkey] = credit.get(coldkey, 0) + int(entry["rao"])
+            g.verified_since = 0.0
+            log.warning("activation of %s dropped: reported %s, paid as %s", g.uuid, g.model, entry["model"])
+            return
+        g.fee_short_rao, g.fee_due = owed, since + TOP_UP_SECONDS
 
     # -- one round ---------------------------------------------------------
 
@@ -543,9 +577,9 @@ class Validator:
                     "price_cap": caps.get(_model_of(record, n.name) or ""),
                     "availability": round(n.availability, 3),
                     "gpus": [{"index": g.index, "uuid": g.uuid, "model": g.model,
-                              "code": _fee_code(g, _gpu_code(g, now, policy, skip)),
+                              "code": codes.FEE_SHORT if g.fee_short_rao else _fee_code(g, _gpu_code(g, now, policy, skip)),
                               "reason": g.code if g.code in codes.NEEDS_REVIEW else None,
-                              "detail": g.last_result, "verified_at": int(g.verified_at) or None,
+                              "detail": _fee_short_detail(g, self.covered) or g.last_result, "verified_at": int(g.verified_at) or None,
                               "idle_pay_from": (int(g.verified_since + policy.probation_seconds) if not skip else int(g.verified_since)) if g.verified_since else None}
                              for g in sorted(record.gpus.values(), key=lambda g: g.index) if g.node == n.name],
                 } for n in record.nodes.values()],
@@ -586,6 +620,15 @@ def _model_of(record: MinerRecord, node: str) -> str | None:
     from .scoring import _node_model
 
     return _node_model(record, node)
+
+
+def _fee_short_detail(g: GpuRecord, covered: dict) -> str:
+    if not g.fee_short_rao:
+        return ""
+    paid_as = covered.get(g.uuid, {}).get("model", "?")
+    due = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(g.fee_due))
+    return (f"activated as {paid_as}, now reports {g.model}: send {g.fee_short_rao / RAO_PER_TAO:g} TAO more to the activation fee address "
+            f"from the same coldkey by {due}")
 
 
 def _fee_code(g: GpuRecord, code: str) -> str:
