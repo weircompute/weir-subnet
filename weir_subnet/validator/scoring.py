@@ -150,8 +150,11 @@ def _node_model(record: MinerRecord, node: str) -> str | None:
     return max(counts, key=counts.get) if counts else None
 
 
+PRICE_FLOOR_SHARE = 0.5  # lowest accepted price, as a share of the model's cap
+
+
 def price_gate(node: NodeRecord, record: MinerRecord, caps: dict[str, float]) -> str:
-    """OK when the machine's price is within its model's cap."""
+    """OK when the machine's price is between its model's floor and cap."""
     from . import codes
 
     key = _node_model(record, node.name)
@@ -161,6 +164,8 @@ def price_gate(node: NodeRecord, record: MinerRecord, caps: dict[str, float]) ->
         return codes.NO_PRICE_CAP
     if not node.price or node.price <= 0 or node.price > caps[key] + 1e-9:
         return codes.PRICE_OVER_CAP
+    if node.price < PRICE_FLOOR_SHARE * caps[key] - 1e-9:
+        return codes.PRICE_UNDER_FLOOR
     return codes.OK
 
 

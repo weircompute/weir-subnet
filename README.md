@@ -94,7 +94,7 @@ On top of emissions, **rent goes to you**: what the renter paid, minus refunds a
 **What an idle GPU needs before it earns:**
 
 - 14 days of passed checks in a row. A missed check, a changed GPU set or a wrong answer starts the count again.
-- Your price at or below the cap for that card.
+- Your price between half the cap and the cap for that card.
 - Disk at least 1.5× the machine's total VRAM.
 - Sysbox as the container runtime.
 - A node that answers at least half the time.
@@ -129,6 +129,7 @@ The code is public on purpose. Each check has a new seed and size, and the rows 
 | `CHALLENGE_SLOW` | Answer came in over the time limit | Check GPU load, clocks and PCIe |
 | `UNKNOWN_MODEL` | Card isn't on the list | Only listed cards earn |
 | `PRICE_OVER_CAP` | Your price is above the cap | Lower `--price` |
+| `PRICE_UNDER_FLOOR` | Your price is below half the cap | Raise `--price` |
 | `DISK_TOO_SMALL` | Disk under 1.5× VRAM | Add disk |
 | `NO_SYSBOX` | Containers don't run under Sysbox | Install Sysbox, keep `--docker-runtime sysbox-runc` |
 | `DUPLICATE_GPU` | The same GPU shows up under two hotkeys | Run each card under one hotkey only |

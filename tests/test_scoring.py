@@ -67,6 +67,14 @@ def test_price_over_cap_gets_no_idle_pay():
     assert detail["hk1"]["idle"] == pytest.approx(IDLE_UNIT, abs=1e-6)
 
 
+def test_price_under_half_the_cap_gets_no_idle_pay():
+    cap = CAPS["rtx4090-24g"]
+    low, edge = miner(1, price=cap * 0.49), miner(2, price=cap * 0.5)
+    _, detail = weigh([low, edge], {}, owner_uid=0, target_capacity=32, now=NOW)
+    assert detail["hk1"]["nodes"]["main"] == codes.PRICE_UNDER_FLOOR and detail["hk1"]["idle"] == 0
+    assert detail["hk2"]["nodes"]["main"] == codes.OK and detail["hk2"]["idle"] > 0
+
+
 def test_disk_and_sysbox_gates():
     small, plain = miner(1, disk=10.0), miner(2, runtime="")
     _, detail = weigh([small, plain], {}, owner_uid=0, target_capacity=32, now=NOW)

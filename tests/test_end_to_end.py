@@ -58,7 +58,7 @@ class FakeChain:
         return [(sender, rao, block) for to, sender, rao, block in self.transfers if to == address and start <= block <= end]
 
 
-async def start_node(tmp_path, name, hotkey, gpu_spec="RTX 4090:24564:2", price="0.40", solver=None, sign_with=None, uuid_salt=None):
+async def start_node(tmp_path, name, hotkey, gpu_spec="RTX 4090:24564:2", price="0.60", solver=None, sign_with=None, uuid_salt=None):
     config = NodeConfig(
         hotkey=sign_with or hotkey, validators={VALIDATOR.ss58_address}, platform={PLATFORM.ss58_address},
         gpus=gpus.simulated(gpu_spec, uuid_salt or name), simulated=True, price_usd_per_gpu_hour=price,

@@ -24,6 +24,7 @@ CHALLENGE_WRONG = "CHALLENGE_WRONG"  # wrong answer: miner scores 0 for 24 hours
 STRUCK = "STRUCK"  # miner is in its 24-hour zero period
 
 PRICE_OVER_CAP = "PRICE_OVER_CAP"  # price above the model's cap: no idle pay, not sold
+PRICE_UNDER_FLOOR = "PRICE_UNDER_FLOOR"  # price below half the model's cap: no idle pay, not sold
 NO_PRICE_CAP = "NO_PRICE_CAP"  # no cap published for this model yet: no idle pay, not sold
 PROBATION = "PROBATION"  # verified, but not yet for the full waiting period
 NOT_ACTIVATED = "NOT_ACTIVATED"  # activation fee not paid (for the hotkey, or for this GPU): no idle pay, not sold
@@ -54,6 +55,7 @@ EXPLAIN = {
     CHALLENGE_WRONG: "wrong answer: your score is 0 for 24 hours",
     STRUCK: "inside the 24-hour zero period after a wrong answer",
     PRICE_OVER_CAP: "your price is above this model's cap: idle GPUs earn no idle pay and are not sold",
+    PRICE_UNDER_FLOOR: "your price is below half of this model's cap: idle GPUs earn no idle pay and are not sold",
     NO_PRICE_CAP: "no price cap is published for this model yet: idle GPUs earn no idle pay and are not sold",
     PROBATION: "verified; idle pay starts once it has passed checks without a gap for the waiting period",
     NOT_ACTIVATED: "no activation fee received for this GPU (or for any GPU of this hotkey): it earns no idle pay and is not sold",

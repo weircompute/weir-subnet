@@ -40,7 +40,7 @@ class Chain:
 
 async def node(tmp_path, name, gpu_spec, sign_with=MINER, fleet=None, calls_itself=None, keep=None):
     config = NodeConfig(hotkey=sign_with, validators={VALIDATOR.ss58_address}, platform={PLATFORM.ss58_address},
-                        gpus=gpus.simulated(gpu_spec, f"{name}-box"), simulated=True, price_usd_per_gpu_hour="0.30",
+                        gpus=gpus.simulated(gpu_spec, f"{name}-box"), simulated=True, price_usd_per_gpu_hour="0.60",
                         state_dir=tmp_path / name, name=calls_itself or name, fleet=fleet or [])
     agent = Node(config)
     if keep is not None:
