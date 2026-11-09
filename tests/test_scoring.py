@@ -137,17 +137,6 @@ def test_rest_goes_to_the_reserve_uid():
     assert weights[7] == pytest.approx(1 - IDLE_UNIT) and 0 not in weights
 
 
-def test_activation_fees_pay_back_faster_on_bigger_cards():
-    """Payback time is fee / (weight x idle unit). The default fees are set so
-    the H100 earns its fee back in two thirds of the time an RTX 4090 needs."""
-    from weir_subnet.validator.models import MODELS
-
-    by_key = {m.key: m for m in MODELS}
-    payback = {k: m.fee_tao / m.weight for k, m in by_key.items()}
-    assert 1.4 < payback["rtx4090-24g"] / payback["h100-80g"] < 1.6
-    assert payback["h100-80g"] == min(payback.values()) and payback["rtx4090-24g"] == max(payback.values())
-
-
 def test_axon_addresses_from_chain():
     from weir_subnet.validator.chain import axon_address
 

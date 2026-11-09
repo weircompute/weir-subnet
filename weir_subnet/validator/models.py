@@ -14,9 +14,9 @@ bandwidth and marked calibrated=False: their limits get extra slack until
 someone runs `weir-node selftest --json` on that card.
 
 weight is the model's relative value when sharing out emissions, roughly in
-line with what each card rents for. fee_tao is the one-time activation fee for
-one GPU of the model. Both are defaults: the platform file can set others
-per model ("weights", "fees"), so they can change without a release.
+line with what each card rents for. It is a default: the platform file can
+set others per model ("weights"). Activation fees come only from the platform
+file ("fees"); miners get the current ones from the platform (`weir-node quote`).
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ class Model:
     min_tflops: float  # slowest acceptable fp16 multiply rate
     mem_gbs: float  # memory bandwidth, GB/s (the lower variant where SXM and PCIe share a name)
     weight: float
-    fee_tao: float
     calibrated: bool = False
 
     @property
@@ -43,14 +42,14 @@ class Model:
 
 
 MODELS: tuple[Model, ...] = (
-    Model("h100-80g", ("H100",), (79_000, 82_000), 250.0, 2000, 4.0, 10.0),
-    Model("a100-80g", ("A100",), (79_000, 82_000), 200.0, 1935, 2.5, 7.8),
-    Model("a100-40g", ("A100",), (39_000, 41_000), 200.0, 1555, 1.8, 6.1),
-    Model("a800-80g", ("A800",), (79_000, 82_000), 200.0, 1935, 2.4, 7.6),
-    Model("a800-40g", ("A800",), (39_000, 41_000), 200.0, 1555, 1.7, 5.9, calibrated=True),
-    Model("rtx5090-32g", ("RTX 5090",), (31_000, 33_000), 130.0, 1792, 1.3, 4.7),
-    Model("rtx4090-48g", ("RTX 4090",), (48_000, 50_000), 100.0, 1008, 1.2, 4.4),
-    Model("rtx4090-24g", ("RTX 4090",), (23_500, 24_600), 100.0, 1008, 1.0, 3.7),
+    Model("h100-80g", ("H100",), (79_000, 82_000), 250.0, 2000, 4.0),
+    Model("a100-80g", ("A100",), (79_000, 82_000), 200.0, 1935, 2.5),
+    Model("a100-40g", ("A100",), (39_000, 41_000), 200.0, 1555, 1.8),
+    Model("a800-80g", ("A800",), (79_000, 82_000), 200.0, 1935, 2.4),
+    Model("a800-40g", ("A800",), (39_000, 41_000), 200.0, 1555, 1.7, calibrated=True),
+    Model("rtx5090-32g", ("RTX 5090",), (31_000, 33_000), 130.0, 1792, 1.3),
+    Model("rtx4090-48g", ("RTX 4090",), (48_000, 50_000), 100.0, 1008, 1.2),
+    Model("rtx4090-24g", ("RTX 4090",), (23_500, 24_600), 100.0, 1008, 1.0),
 )
 
 

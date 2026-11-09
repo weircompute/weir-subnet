@@ -145,15 +145,47 @@ class Validator:
         return caps
 
     def _per_model(self, name: str) -> dict[str, float]:
-        """Per-model numbers from the platform file ("weights" or "fees"), over the defaults."""
-        out = {m.key: (m.weight if name == "weights" else m.fee_tao) for m in MODELS}
+        """Per-model numbers from the platform file ("weights" or "fees").
+        Weights fall back to the model defaults. Fees have no default: a model
+        without a fee in the platform file cannot be activated, and GPUs
+        already activated stay activated."""
+        known = {m.key for m in MODELS}
+        out = {m.key: m.weight for m in MODELS} if name == "weights" else {}
         given = self._platform().get(name, {})
         for key, value in (given.items() if isinstance(given, dict) else ()):
             try:
-                if key in out and float(value) >= 0:
+                if key in known and float(value) >= 0:
                     out[key] = float(value)
             except (TypeError, ValueError):
                 continue
+        return out
+
+    def _fee_quotes(self, now: float) -> dict[str, dict[str, float]]:
+        """Fees quoted to a hotkey and still open, from the platform file:
+        {hotkey: {"fees": {model key: TAO}, "until": unix time}}. While a quote
+        is open, that hotkey pays the lower of the quoted and the current fee."""
+        given = self._platform().get("fee_quotes", {})
+        known = {m.key for m in MODELS}
+        out = {}
+        for hotkey, entry in (given.items() if isinstance(given, dict) else ()):
+            try:
+                if not isinstance(entry, dict) or float(entry.get("until", 0)) <= now:
+                    continue
+                fees = {k: float(v) for k, v in (entry.get("fees") or {}).items() if k in known and float(v) >= 0}
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if fees:
+                out[str(hotkey)] = fees
+        return out
+
+    def _fees_for(self, hotkey: str, fees: dict[str, float], quotes: dict[str, dict[str, float]]) -> dict[str, float]:
+        """The activation fee per model for one hotkey: current fees, lowered by an open quote."""
+        quoted = quotes.get(hotkey)
+        if not quoted:
+            return fees
+        out = dict(fees)
+        for key, value in quoted.items():
+            out[key] = min(out.get(key, value), value)
         return out
 
     def _credit_elsewhere(self) -> dict[str, float]:
@@ -232,8 +264,9 @@ class Validator:
                 for g in record.gpus.values():
                     g.fee_covered = True
             return
-        fees = {k: round(v * RAO_PER_TAO) for k, v in self._per_model("fees").items()}
-        cheapest = min(fees.values(), default=0)
+        current = self._per_model("fees")
+        quotes = self._fee_quotes(now)
+        fees_of = {h: {k: round(v * RAO_PER_TAO) for k, v in self._fees_for(h, current, quotes).items()} for h in self.miners}
         special = self._special(snapshot)
         coldkey_of = {n.hotkey: n.coldkey for n in snapshot.neurons if n.hotkey not in special}
         credit: dict[str, int] = dict(self.fees_paid)
@@ -250,12 +283,12 @@ class Validator:
                 entry = self.covered.get(g.uuid)
                 g.fee_covered = bool(coldkey and entry and entry["coldkey"] == coldkey)
                 if g.fee_covered and g.model:
-                    self._settle_model_change(g, entry, fees, credit, coldkey, now)
+                    self._settle_model_change(g, entry, fees_of[record.hotkey], credit, coldkey, now)
                     entry = self.covered.get(g.uuid)
-                if coldkey and not entry and g.model and g.verified_since:
+                if coldkey and not entry and g.model in fees_of[record.hotkey] and g.verified_since:
                     candidates.append((record, coldkey, g))
         for record, coldkey, g in sorted(candidates, key=lambda c: (-c[2].weight, c[0].uid, c[2].index)):
-            fee = fees.get(g.model, 0)
+            fee = fees_of[record.hotkey][g.model]
             if credit.get(coldkey, 0) >= fee:
                 credit[coldkey] = credit.get(coldkey, 0) - fee
                 self.covered[g.uuid] = {"hotkey": record.hotkey, "coldkey": coldkey, "rao": fee, "model": g.model}
@@ -266,17 +299,18 @@ class Validator:
         wanted = sorted(((h, k) for h, d in disputed_wanted.items() for k, n in d.items() for _ in range(n)), key=lambda e: (-weights[e[1]], e[0]))
         for hotkey, key in wanted:
             coldkey = coldkey_of.get(hotkey)
-            fee = fees.get(key, 0)
-            ok = bool(coldkey) and credit.get(coldkey, 0) >= fee
+            fee = fees_of.get(hotkey, {}).get(key)
+            ok = bool(coldkey) and fee is not None and credit.get(coldkey, 0) >= fee
             if ok:
                 credit[coldkey] = credit.get(coldkey, 0) - fee
             self.disputed.setdefault(hotkey, []).append((key, weights[key], ok))
         self.credit_left = credit
         for record in self.miners.values():
             coldkey = coldkey_of.get(record.hotkey)
+            cheapest = min(fees_of[record.hotkey].values(), default=None)
             record.fee_paid = bool(coldkey) and (any(g.fee_covered for g in record.gpus.values())
                                                  or any(ok for _, _, ok in self.disputed.get(record.hotkey, []))
-                                                 or credit.get(coldkey, 0) >= cheapest)
+                                                 or (cheapest is not None and credit.get(coldkey, 0) >= cheapest))
 
     def _settle_model_change(self, g: GpuRecord, entry: dict, fees: dict[str, int], credit: dict[str, int], coldkey: str, now: float) -> None:
         """Activations record the model paid for (older ones without it are left
@@ -285,9 +319,9 @@ class Validator:
         pays it when there is enough; otherwise the GPU is not covered, and
         after TOP_UP_SECONDS the activation is dropped (what was paid goes back
         to credit) and its waiting period starts again."""
-        if "model" not in entry:
+        if "model" not in entry or g.model not in fees:
             return
-        owed = fees.get(g.model, 0) - int(entry["rao"])
+        owed = fees[g.model] - int(entry["rao"])
         if owed <= 0 or g.model == entry["model"]:
             entry.pop("short_since", None)
             return
@@ -554,6 +588,7 @@ class Validator:
         policy = self.config.policy
         coldkey_of = {n.hotkey: n.coldkey for n in snapshot.neurons}
         fees = self._per_model("fees")
+        quotes = self._fee_quotes(now)
         reviews = self._reviews()
         miners = {}
         for record in self.miners.values():
@@ -568,7 +603,7 @@ class Validator:
                 "uid": record.uid,
                 "struck_until": int(record.struck_until) if struck else None,
                 "activated": record.fee_paid,
-                "activation_fees_tao": fees,
+                "activation_fees_tao": self._fees_for(record.hotkey, fees, quotes),
                 "activation_credit_tao": round(max(0, self.credit_left.get(coldkey_of.get(record.hotkey, ""), 0)) / RAO_PER_TAO, 4),
                 "payout_address": record.payout_address,
                 "nodes": [{

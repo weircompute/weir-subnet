@@ -77,6 +77,24 @@ Use the same hotkey everywhere and give each machine its own `--name`. On the ma
 
 ---
 
+## Activation fee
+
+Each GPU pays a one-time activation fee, set per card. Fees change with demand, so they are not listed here. Get the current ones, with the price range each card may be listed at:
+
+```bash
+.venv/bin/weir-node quote --wallet miner --hotkey default
+```
+
+A quote is held for that hotkey for 7 days: GPUs it activates in that time pay at most the quoted fee. No hotkey yet? Sign in at [weircompute.com](https://weircompute.com), create an API key under **API keys**, and ask with it:
+
+```bash
+curl -H "Authorization: Bearer <API key>" "https://weircompute.com/v1/miner/quote?hotkey=<your hotkey>"
+```
+
+Pay from the hotkey's coldkey to `5Dk1ftRx4wpwZsiufim8KvHPaeY7k9RdkXJmii2ADv9uHfZ9`. Payments add up as credit, and each GPU is activated once it passes its first check. A GPU that later reports a dearer card owes the difference within 7 days. Activation fees are not refunded.
+
+---
+
 ## How you earn
 
 Every weight-setting round, the miner share of emissions is split three ways:

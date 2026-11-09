@@ -10,6 +10,9 @@ from weir_subnet.validator.validator import Validator, ValidatorConfig
 from test_end_to_end import OWNER, VALIDATOR, FakeChain, key
 
 TAO = 10**9
+# The fees published in the platform file (the validator has none of its own).
+FEES = {"h100-80g": 10.0, "a100-80g": 7.8, "a100-40g": 6.1, "a800-80g": 7.6, "a800-40g": 5.9,
+        "rtx5090-32g": 4.7, "rtx4090-48g": 4.4, "rtx4090-24g": 3.7}
 A, B = key("FeeMinerA").ss58_address, key("FeeMinerB").ss58_address
 
 
@@ -21,7 +24,7 @@ def setup(tmp_path, paid_rao, platform=None, gpus_a=(), gpus_b=()):
     neurons = [Neuron(0, OWNER.ss58_address, None, True, "cold-owner"),
                Neuron(1, A, "127.0.0.1:1", False, "cold-a"), Neuron(2, B, "127.0.0.1:2", False, "cold-b")]
     path = tmp_path / "platform.json"
-    path.write_text(json.dumps(platform or {}))
+    path.write_text(json.dumps({"fees": FEES, **(platform or {})}))
     v = Validator(VALIDATOR, FakeChain(neurons), ValidatorConfig(state_file=tmp_path / "s.json", platform_file=path, fee_address="fee"))
     v.fees_paid = dict(paid_rao)
     v.miners[A] = MinerRecord(A, 1, gpus={g.uuid: g for g in gpus_a})
@@ -62,11 +65,41 @@ def test_covered_gpus_stay_covered_after_a_fee_change(tmp_path):
 
 
 def test_platform_credit_and_weight_override(tmp_path):
-    v, snap = setup(tmp_path, {}, platform={"activation_credit": {B: 7.4}, "weights": {"rtx4090-24g": 0.5}, "fees": {"nope": 1}},
+    v, snap = setup(tmp_path, {}, platform={"activation_credit": {B: 7.4}, "weights": {"rtx4090-24g": 0.5}, "fees": {**FEES, "nope": 1}},
                     gpus_b=[gpu("p", "rtx4090-24g", 1.0), gpu("q", "rtx4090-24g", 1.0, 1)])
     v._apply_fees(snap)
     assert all(g.fee_covered for g in v.miners[B].gpus.values())
     assert v._per_model("weights")["rtx4090-24g"] == 0.5 and "nope" not in v._per_model("fees")
+
+
+def test_a_model_without_a_published_fee_is_not_activated(tmp_path):
+    v, snap = setup(tmp_path, {"cold-a": 50 * TAO}, platform={"fees": {"rtx4090-24g": 3.7}},
+                    gpus_a=[gpu("h", "h100-80g", 4.0), gpu("r", "rtx4090-24g", 1.0, 1)])
+    v._apply_fees(snap)
+    gpus = v.miners[A].gpus
+    assert not gpus["h"].fee_covered and gpus["r"].fee_covered
+
+
+def test_no_fees_published_activates_nothing_new_but_keeps_activations(tmp_path):
+    v, snap = setup(tmp_path, {"cold-a": 50 * TAO}, platform={"fees": {}},
+                    gpus_a=[gpu("old", "rtx4090-24g", 1.0), gpu("new", "rtx4090-24g", 1.0, 1)])
+    v.covered["old"] = {"hotkey": A, "coldkey": "cold-a", "rao": 37 * TAO // 10, "model": "rtx4090-24g"}
+    v._apply_fees(snap)
+    gpus = v.miners[A].gpus
+    assert gpus["old"].fee_covered and not gpus["new"].fee_covered and v.miners[A].fee_paid
+
+
+def test_an_open_quote_keeps_the_lower_fee(tmp_path):
+    # Quoted 3.7 for a 4090; the fee has since gone up to 5. The quote holds until it ends.
+    quote = {A: {"fees": {"rtx4090-24g": 3.7}, "until": 5000}}
+    v, snap = setup(tmp_path, {"cold-a": 3701 * TAO // 1000, "cold-b": 3701 * TAO // 1000},
+                    platform={"fees": {**FEES, "rtx4090-24g": 5.0}, "fee_quotes": quote},
+                    gpus_a=[gpu("a", "rtx4090-24g", 1.0)], gpus_b=[gpu("b", "rtx4090-24g", 1.0)])
+    v._apply_fees(snap, now=1000.0)
+    assert v.miners[A].gpus["a"].fee_covered and not v.miners[B].gpus["b"].fee_covered
+    # A quote never raises a fee, and an ended quote is ignored.
+    assert v._fees_for(A, {"rtx4090-24g": 3.0}, v._fee_quotes(1000.0))["rtx4090-24g"] == 3.0
+    assert v._fee_quotes(5000.0) == {}
 
 
 def test_no_fee_address_covers_everything(tmp_path):

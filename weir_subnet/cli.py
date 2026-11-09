@@ -67,7 +67,8 @@ def node_main(argv: list[str] | None = None) -> None:
     selftest.add_argument("--json", action="store_true", help="print measured numbers (used to calibrate time limits)")
 
     for name, text in (("summary", "balance, payable amount, payout address"), ("earnings", "statement of every earning, penalty and payout"),
-                       ("payouts", "payouts and their transaction hashes"), ("status", "why each machine and GPU is or is not sold")):
+                       ("payouts", "payouts and their transaction hashes"), ("status", "why each machine and GPU is or is not sold"),
+                       ("quote", "current activation fees and price limits, held for this hotkey for 7 days")):
         cmd = sub.add_parser(name, help=text)
         _wallet_args(cmd)
         cmd.add_argument("--platform-url", default=network.PLATFORM_URL, help="Weir platform address")
@@ -88,7 +89,7 @@ def node_main(argv: list[str] | None = None) -> None:
         print(st.report(checks, args.json))
         raise SystemExit(1 if any(c.result == "FAIL" for c in checks) else 0)
 
-    if args.command in ("summary", "earnings", "payouts", "status"):
+    if args.command in ("summary", "earnings", "payouts", "status", "quote"):
         print(asyncio.run(_miner_report(args)))
         return
 
@@ -169,6 +170,8 @@ async def _miner_report(args) -> str:
             text = await response.text()
             if response.status != 200:
                 raise SystemExit(f"platform refused ({response.status}): {text}")
+    if args.command == "quote":
+        return _quote_text(json.loads(text))
     if args.command != "status":
         return text if getattr(args, "csv", False) else json.dumps(json.loads(text), indent=1)
     miner = json.loads(text).get("miner")
@@ -186,6 +189,21 @@ async def _miner_report(args) -> str:
             lines.append(f"  GPU {gpu['index']} {gpu.get('model') or '?'}: {gpu['code']} - {EXPLAIN.get(gpu['code'], '')}{detail}")
     for entry in miner.get("disputed", []):
         lines.append(f"Under review: {entry['count']} x {entry['model']} ({entry['activated']} activated): {entry['code']} - {EXPLAIN.get(entry['code'], '')}")
+    return "\n".join(lines)
+
+
+def _quote_text(quote: dict) -> str:
+    lines = [f"{'Card':<14} {'Activation fee':>15} {'Price per GPU-hour':>22}"]
+    for card in quote.get("cards", []):
+        fee = card.get("activationFeeTao")
+        fee = f"{fee} TAO" if fee is not None else "not open"
+        price = f"${card['priceFloorUsd']} - ${card['priceCapUsd']}" if card.get("priceCapUsd") else "-"
+        lines.append(f"{card['name']:<14} {fee:>15} {price:>22}")
+    lines.append("")
+    if quote.get("hotkey"):
+        lines.append(f"Quote {quote['quoteId']} for {quote['hotkey']}, held until {quote['expiresAt']}:")
+        lines.append("GPUs this hotkey activates before then pay at most these fees.")
+    lines.append(f"Pay from this hotkey's coldkey to {quote.get('feeAddress')}.")
     return "\n".join(lines)
 
 

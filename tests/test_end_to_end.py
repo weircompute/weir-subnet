@@ -29,7 +29,8 @@ NO_WAIT = Policy(require_sysbox=False, min_disk_ratio=0, probation_seconds=0)
 def platform_file(tmp_path, caps=None, generated_at=None, activation_credit=None, **extra):
     path = tmp_path / "platform.json"
     path.write_text(json.dumps({"generated_at": generated_at or time.time(), "caps": caps if caps is not None else {"rtx4090-24g": 1.0},
-                                "activation_credit": activation_credit or {}, **extra}))
+                                "activation_credit": activation_credit or {},
+                                "fees": {"h100-80g": 10.0, "rtx4090-24g": 3.7}, **extra}))
     return path
 
 
