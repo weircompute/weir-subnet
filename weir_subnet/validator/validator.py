@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import random
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -44,6 +45,10 @@ RAO_PER_TAO = 10**9
 TOP_UP_SECONDS = 7 * 86400  # time to pay the difference after a GPU starts reporting a dearer model
 
 log = logging.getLogger("weir.validator")
+
+# nvidia-smi's GPU UUID; development nodes report GPU-sim-<hex>.
+NVIDIA_UUID = re.compile(r"^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+SIMULATED_UUID = re.compile(r"^GPU-sim-[0-9a-f]{24}$")
 
 
 @dataclass
@@ -449,6 +454,11 @@ class Validator:
             record.last_challenge = time.time()
             await asyncio.gather(*(self._challenge(client, record, g) for g in due))
 
+    def _real_uuid(self, uuid: str) -> bool:
+        """What nvidia-smi gives a card. Activations, duplicate checks and
+        rentals are tied to it, so a made-up one is not counted."""
+        return bool(NVIDIA_UUID.match(uuid) or (not self.config.timing and SIMULATED_UUID.match(uuid)))
+
     def _update_inventory(self, record: MinerRecord, node: NodeRecord, inventory: dict) -> None:
         mine = {u: g for u, g in record.gpus.items() if g.node == node.name}
         weights = self._per_model("weights")
@@ -456,13 +466,18 @@ class Validator:
         for g in inventory.get("gpus", []):
             model = classify(str(g.get("name", "")), int(g.get("vram_mib", 0)))
             uuid = str(g.get("uuid", ""))
+            real = self._real_uuid(uuid)
+            if not real:
+                model = None
             key = model.key if model else None
             old = mine.get(uuid)
             keep = old is not None and old.model == key
             gpu = GpuRecord(uuid, key, weights.get(key, 0.0) if model else 0.0, old.verified_at if keep else 0.0,
                             old.last_result if keep else "", node.name, old.code if keep else codes.PENDING, int(g.get("index", 0)),
                             old.verified_since if keep else 0.0, old.fee_covered if old else not self.config.fee_address)
-            if not model:
+            if not real:
+                gpu.code, gpu.last_result = codes.BAD_GPU_ID, f"UUID {uuid[:40]!r}"
+            elif not model:
                 gpu.code, gpu.last_result = codes.UNKNOWN_MODEL, f"{g.get('name')} with {g.get('vram_mib')} MiB"
             elif g.get("rented"):
                 gpu.code = codes.RENTED

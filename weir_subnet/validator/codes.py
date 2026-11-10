@@ -15,6 +15,7 @@ HTTP_ERROR = "HTTP_ERROR"  # node answered with an error
 FLEET_INVALID = "FLEET_INVALID"  # fleet entry does not match the node's own name, or too many nodes
 
 UNKNOWN_MODEL = "UNKNOWN_MODEL"  # GPU name and memory match no accepted model
+BAD_GPU_ID = "BAD_GPU_ID"  # the GPU's UUID is not one an NVIDIA driver gives: not counted
 GPU_SET_CHANGED = "GPU_SET_CHANGED"  # GPUs differ from last time: every GPU is checked again
 DUPLICATE_GPU = "DUPLICATE_GPU"  # this GPU is already registered under another hotkey or node
 
@@ -48,6 +49,7 @@ EXPLAIN = {
     HTTP_ERROR: "the node answered with an error: check its log",
     FLEET_INVALID: "the fleet entry does not match this machine's --name, or the fleet is too large",
     UNKNOWN_MODEL: "this GPU is not on the accepted list",
+    BAD_GPU_ID: "the GPU's UUID is not what nvidia-smi reports for a real card: run the unmodified weir-node",
     GPU_SET_CHANGED: "GPUs changed since last time: every GPU is checked again",
     DUPLICATE_GPU: "this GPU is already registered elsewhere; only the first registration counts",
     CHALLENGE_REFUSED: "the node did not take the check: check its log",

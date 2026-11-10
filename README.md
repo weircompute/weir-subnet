@@ -146,6 +146,7 @@ The code is public on purpose. Each check has a new seed and size, and the rows 
 | `UNREACHABLE` | The validator couldn't reach the node | Check the port and the announced address |
 | `CHALLENGE_SLOW` | Answer came in over the time limit | Check GPU load, clocks and PCIe |
 | `UNKNOWN_MODEL` | Card isn't on the list | Only listed cards earn |
+| `BAD_GPU_ID` | The GPU's UUID isn't one nvidia-smi gives a real card | Run the unmodified `weir-node` |
 | `PRICE_OVER_CAP` | Your price is above the cap | Lower `--price` |
 | `PRICE_UNDER_FLOOR` | Your price is below half the cap | Raise `--price` |
 | `DISK_TOO_SMALL` | Disk under 1.5× VRAM | Add disk |

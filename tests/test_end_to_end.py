@@ -267,3 +267,30 @@ async def test_unexpected_node_error_is_signed_and_order_can_be_asked_about(tmp_
             assert not any(g["rented"] for g in inventory["gpus"])
     finally:
         await server.close()
+
+
+async def test_made_up_gpu_uuid_is_not_counted(tmp_path, monkeypatch):
+    """A GPU whose UUID is not what nvidia-smi gives earns nothing and is not sold."""
+    real = gpus.simulated
+    def one_fake(spec, salt):
+        found = real(spec, salt)
+        if salt == "faker":
+            found[0].uuid = "GPU-wei-0000"
+        return found
+    monkeypatch.setattr(gpus, "simulated", one_fake)
+    faker_key = key("Faker")
+    server = await start_node(tmp_path, "faker", faker_key)
+    try:
+        chain = FakeChain([Neuron(0, OWNER.ss58_address, None, True), Neuron(1, faker_key.ss58_address, f"127.0.0.1:{server.port}", False)])
+        config = ValidatorConfig(state_file=tmp_path / "v" / "state.json", summary_file=tmp_path / "summary.json", sellable_file=tmp_path / "sellable.json",
+                                 challenge_n=128, max_pairs=3, timing=False, weights_every=0, target_capacity=32, policy=NO_WAIT,
+                                 platform_file=platform_file(tmp_path))
+        validator = Validator(VALIDATOR, chain, config)
+        weights = await validator.run_round()
+        gpus_seen = validator.miners[faker_key.ss58_address].gpus
+        assert gpus_seen["GPU-wei-0000"].code == "BAD_GPU_ID" and gpus_seen["GPU-wei-0000"].weight == 0
+        assert weights[1] == pytest.approx(1 * 0.80 / 32)  # only the real card earns
+        sellable = json.loads((tmp_path / "sellable.json").read_text())["nodes"]
+        assert "GPU-wei-0000" not in sellable[0]["verified_gpus"] and len(sellable[0]["verified_gpus"]) == 1
+    finally:
+        await server.close()
