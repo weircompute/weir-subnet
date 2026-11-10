@@ -247,3 +247,23 @@ async def test_fees_reserve_and_probation(tmp_path):
     finally:
         for server in (np_, nu, pricey):
             await server.close()
+
+
+async def test_unexpected_node_error_is_signed_and_order_can_be_asked_about(tmp_path, monkeypatch):
+    """A crash while taking an order still gives a signed answer, and the
+    platform can then ask whether the order was taken."""
+    hotkey = key("Crashy")
+    server = await start_node(tmp_path, "crashy", hotkey)
+    monkeypatch.setattr(Node, "_save_orders", lambda self: (_ for _ in ()).throw(OSError("disk full")))
+    try:
+        async with aiohttp.ClientSession() as session:
+            platform = NodeClient(session, PLATFORM, f"http://127.0.0.1:{server.port}", hotkey.ss58_address)
+            reply = await platform.call("POST", "/v1/orders", {"order_id": "wr-9", "gpus": 1, "ssh_keys": ["ssh-ed25519 AAAA test"]})
+            assert reply.status == 500 and "disk full" in reply.data["error"]
+            monkeypatch.undo()
+            # An order the node could not save was not taken: no GPUs held.
+            assert (await platform.call("GET", "/v1/orders/wr-9")).status == 404
+            inventory = (await platform.call("GET", "/v1/inventory")).data
+            assert not any(g["rented"] for g in inventory["gpus"])
+    finally:
+        await server.close()

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import secrets
 import time
@@ -33,6 +34,8 @@ from .runtime import Runtime, RuntimeFailure, StateOnlyRuntime
 CHALLENGE_TTL = 600  # seconds a commitment stays open
 MAX_OPEN_CHALLENGES = 64
 MAX_BODY = 1 << 20
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -262,7 +265,11 @@ class Node:
             return self.reply(request, {"error": "no free port" if keys else "no ssh keys"}, 409 if keys else 400)
         order = Order(order_id, free[:count], str(data.get("image", "")), int(data.get("hours", 1)), keys, port=port)
         self.orders[order_id] = order
-        self._save_orders()  # saved before launching, so a crash cannot lose it
+        try:
+            self._save_orders()  # saved before launching, so a crash cannot lose it
+        except Exception:
+            del self.orders[order_id]  # not taken: the platform sees 404 and refunds
+            raise
         self._start(order)
         return self.reply(request, order.view(self.config.public_host), 201)
 
@@ -329,13 +336,17 @@ class Node:
 
     @web.middleware
     async def sign_errors(self, request: web.Request, handler):
-        """Refusals (401, 403, 404, 413...) are signed like every other answer."""
+        """Refusals (401, 403, 404, 413...) and unexpected errors are signed like
+        every other answer, so the caller can trust and act on them."""
         try:
             return await handler(request)
         except web.HTTPException as error:
             if error.status < 400:
                 raise
             return self.reply(request, {"error": error.text or error.reason}, error.status)
+        except Exception as error:  # noqa: BLE001 - a signed 500 lets the platform ask what happened
+            log.exception("%s %s failed", request.method, request.path)
+            return self.reply(request, {"error": f"node error: {type(error).__name__}: {error}"[:300]}, 500)
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=MAX_BODY, middlewares=[self.sign_errors])
