@@ -65,7 +65,7 @@ async def test_fleet_of_machines_under_one_hotkey(tmp_path):
                                  challenge_n=128, max_pairs=1, timing=False, weights_every=0, target_capacity=32,
                                  policy=Policy(require_sysbox=False, min_disk_ratio=0, probation_seconds=0), platform_file=_platform(tmp_path))
         weights = await Validator(VALIDATOR, chain, config).run_round()
-        assert weights[1] == pytest.approx(10 * 0.80 / 32)  # 8 + 2 idle verified GPUs count; the others do not
+        assert weights[1] == pytest.approx(10 * 0.90 / 32)  # 8 + 2 idle verified GPUs count; the others do not
 
         sellable = {n["node"]: n for n in json.loads((tmp_path / "sellable.json").read_text())["nodes"]}
         assert set(sellable) == {"big", "small"}

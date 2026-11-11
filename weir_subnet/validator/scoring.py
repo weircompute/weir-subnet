@@ -2,16 +2,20 @@
 
 The miner emission is split into three pools every time weights are set.
 
-  rented  20%   shared by settled rental GPU-hours, each weighted by the
-                GPU model's weight. Rent itself is paid separately (95% of
-                what the tenant paid, in stablecoin), so this is a small extra.
-  idle    <=80% paid per idle GPU that passes every gate below, at
-                model weight x (80% / target_capacity) per GPU. Above a
+  rented  10%   shared by GPU-hours actually used by tenants (rentals under
+                10 minutes do not count), each weighted by the GPU model's
+                weight. A miner's share is capped at the platform fee its
+                rentals paid, so renting your own GPU never earns more than
+                it costs. Rent itself is paid separately (95% of what the
+                tenant paid, in stablecoin).
+  idle    <=90% paid per idle GPU that passes every gate below, at
+                model weight x (90% / target_capacity) per GPU. Above a
                 model's cap of idle GPUs, that model's pay is shared
-                (cap / idle GPUs). If the total would exceed 80% it is scaled
-                down to 80%.
+                (cap / idle GPUs). If the total would exceed 90% it is scaled
+                down to 90%.
   reserve rest  to the reserve hotkey (the owner UID when none is set): the
-                network fund. It shrinks as providers fill the idle pool.
+                network fund. It shrinks as providers fill the idle pool, and
+                takes what the rented-pool cap leaves unpaid.
 
 Idle gates, per machine:
   - the miner has activation credit (and, per GPU, that GPU's activation fee is paid);
@@ -31,9 +35,6 @@ Manual review (from the platform file) can end a miner's probation early,
 and can count GPUs whose check result is disputed: they earn idle pay at
 their model's weight, need their activation fee like any GPU, and are never
 listed for rent.
-
-Rentals of a GPU make the rented pool, not the idle pool, so renting your own
-GPU to yourself costs the platform fee and earns only a share of 20%.
 """
 
 from __future__ import annotations
@@ -120,6 +121,7 @@ class MinerRecord:
 class RentalStats:
     gpu_hours: float = 0.0
     delivery: float | None = None  # 0..1
+    fee_tao: float | None = None  # platform fee those rentals paid, in TAO
 
 
 @dataclass
@@ -133,8 +135,8 @@ class Review:
 
 @dataclass(frozen=True)
 class Policy:
-    rented_share: float = 0.20
-    idle_ceiling: float = 0.80
+    rented_share: float = 0.10
+    idle_ceiling: float = 0.90
     idle_cap_gpus: int = 64  # per model; above it, idle pay for that model is shared
     min_disk_ratio: float = 1.5  # total disk / total VRAM
     require_sysbox: bool = True
@@ -202,6 +204,20 @@ def _vram_gib(g: GpuRecord) -> float:
     return model.vram_mib[0] / 1024 if model else 0.0
 
 
+RENTAL_WINDOW_SECONDS = 7 * 24 * 3600  # the rentals file covers this long
+SECONDS_PER_TEMPO = 360 * 12
+
+
+def rented_cap(fee_tao: float | None, alpha_tao: float, miner_alpha_per_tempo: float) -> float:
+    """Most a hotkey may get from the rented pool, as a share of the miner
+    emission: the platform fee its rentals paid over the window, in alpha,
+    spread over the window's tempos. 0 when anything is unknown."""
+    if not fee_tao or fee_tao <= 0 or alpha_tao <= 0 or miner_alpha_per_tempo <= 0:
+        return 0.0
+    tempos = RENTAL_WINDOW_SECONDS / SECONDS_PER_TEMPO
+    return (fee_tao / alpha_tao) / tempos / miner_alpha_per_tempo
+
+
 def compute_weights(
     miners: list[MinerRecord],
     rentals: dict[str, RentalStats],
@@ -211,8 +227,13 @@ def compute_weights(
     policy: Policy = Policy(),
     caps: dict[str, float] | None = None,
     reviews: dict[str, Review] | None = None,
+    rented_caps: dict[str, float] | None = None,
 ) -> tuple[dict[int, float], dict[str, dict]]:
-    """Returns ({uid: weight}, per-hotkey breakdown for the public summary)."""
+    """Returns ({uid: weight}, per-hotkey breakdown for the public summary).
+
+    `rented_caps` is the most each hotkey may get from the rented pool, as a
+    share of the miner emission (see `rented_cap`); a hotkey missing from it
+    gets nothing from the rented pool. None means no cap."""
     from . import codes
     from .models import MODELS
 
@@ -233,6 +254,8 @@ def compute_weights(
             units[m.hotkey] = stats.gpu_hours * model_weight(m) * (stats.delivery if stats.delivery is not None else 1.0)
     total_units = sum(units.values())
     rented = {h: policy.rented_share * u / total_units for h, u in units.items()} if total_units > 0 else {}
+    if rented_caps is not None:
+        rented = {h: min(v, rented_caps.get(h, 0.0)) for h, v in rented.items()}
 
     # Idle pool: GPUs that pass the gates, counted per model for the caps.
     idle_gpus: dict[str, list[tuple[str, float]]] = {}  # hotkey -> [(model, weight)]
@@ -266,6 +289,7 @@ def compute_weights(
         if w > 0:
             weights[m.uid] = weights.get(m.uid, 0.0) + w
         detail[m.hotkey] = {"uid": m.uid, "rented": round(rented.get(m.hotkey, 0.0), 6), "idle": round(idle.get(m.hotkey, 0.0), 6),
+                            "rented_cap": None if rented_caps is None else round(rented_caps.get(m.hotkey, 0.0), 6),
                             "idle_gpus": len(idle_gpus.get(m.hotkey, [])), "weight": round(w, 6),
                             "disputed_gpus": len(reviews.get(m.hotkey, Review()).disputed),
                             "nodes": {n.name: idle_gate(n, m, policy, caps, now) for n in m.nodes.values()},

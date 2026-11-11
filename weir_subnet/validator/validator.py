@@ -35,7 +35,7 @@ from .chain import Chain, Neuron, Snapshot
 from .client import NodeClient, NodeError
 from . import codes
 from .models import MODELS, TIMING_OVERHEAD_S, TIMING_SLACK, classify, time_limit
-from .scoring import (STRIKE_SECONDS, VERIFIED_TTL, GpuRecord, MinerRecord, NodeRecord, Policy, RentalStats, Review, compute_weights,
+from .scoring import (STRIKE_SECONDS, VERIFIED_TTL, GpuRecord, MinerRecord, NodeRecord, Policy, RentalStats, Review, compute_weights, rented_cap,
                       idle_gate, in_probation, price_gate)
 
 MAX_NODES_PER_MINER = 64
@@ -123,9 +123,10 @@ class Validator:
         path = self.config.rentals_file
         if not path or not path.exists():
             return {}
-        # Written by weir-api's `weir-payouts rentals`: billed GPU-hours and
-        # the share of orders delivered without a penalty.
-        return {hotkey: RentalStats(float(v.get("gpu_hours", 0)), v.get("delivery"))
+        # Written by weir-api's `weir-payouts rentals`: GPU-hours used, the
+        # share of orders delivered without a penalty, and the platform fee
+        # those rentals paid in TAO (the rented-pool cap).
+        return {hotkey: RentalStats(float(v.get("gpu_hours", 0)), v.get("delivery"), v.get("fee_tao"))
                 for hotkey, v in json.loads(path.read_text()).items()}
 
     def _platform(self) -> dict:
@@ -640,8 +641,10 @@ class Validator:
     async def _set_weights(self, snapshot: Snapshot, now: float) -> dict[int, float]:
         reviews = {h: Review(skip_probation=r["skip_probation"], disputed=[(k, w) for k, w, ok in self.disputed.get(h, []) if ok])
                    for h, r in self._reviews().items()}
-        weights, detail = compute_weights(list(self.miners.values()), self._rentals(), self._reserve_uid(snapshot), self.config.target_capacity, now,
-                                          self.config.policy, self._caps(), reviews)
+        rentals = self._rentals()
+        caps = {h: rented_cap(r.fee_tao, snapshot.alpha_tao, snapshot.miner_alpha_per_tempo) for h, r in rentals.items()}
+        weights, detail = compute_weights(list(self.miners.values()), rentals, self._reserve_uid(snapshot), self.config.target_capacity, now,
+                                          self.config.policy, self._caps(), reviews, caps)
         try:
             await asyncio.to_thread(self.chain.set_weights, weights)
         except Exception as error:

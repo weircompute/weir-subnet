@@ -24,7 +24,7 @@ def test_skip_probation_lets_a_new_gpu_earn():
     plain, _ = compute_weights([m], {}, 0, 100.0, NOW, Policy(), caps)
     assert 1 not in plain  # still in probation
     reviewed, detail = compute_weights([m], {}, 0, 100.0, NOW, Policy(), caps, {A: Review(skip_probation=True)})
-    assert abs(reviewed[1] - 0.8 / 100) < 1e-9
+    assert abs(reviewed[1] - 0.9 / 100) < 1e-9
     assert _gpu_code(g, NOW, Policy()) == codes.PROBATION and _gpu_code(g, NOW, Policy(), True) == codes.OK
 
 
@@ -33,7 +33,7 @@ def test_disputed_gpus_earn_idle_pay_without_a_node():
 
     m = MinerRecord(B, 2)
     weights, detail = compute_weights([m], {}, 0, 100.0, NOW, Policy(), {}, {B: Review(disputed=[("h100-80g", 4.0), ("h100-80g", 4.0)])})
-    assert abs(weights[2] - 2 * 4.0 * 0.8 / 100) < 1e-9
+    assert abs(weights[2] - 2 * 4.0 * 0.9 / 100) < 1e-9
     assert detail[B]["disputed_gpus"] == 2
     struck = MinerRecord(B, 2, struck_until=NOW + 10)
     assert 2 not in compute_weights([struck], {}, 0, 100.0, NOW, Policy(), {}, {B: Review(disputed=[("h100-80g", 4.0)])})[0]

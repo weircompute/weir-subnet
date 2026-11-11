@@ -100,8 +100,8 @@ async def test_round_scores_only_the_honest_miner(network, tmp_path):
     weights = await validator.run_round()
     assert weights is not None and chain.weights == [weights]
     assert set(weights) == {0, 1}  # owner (no reserve set) and the honest miner
-    assert weights[1] == pytest.approx(2 * 0.80 / 32)  # 2 idle verified RTX 4090s of a 32-unit target
-    assert weights[0] == pytest.approx(1 - 2 * 0.80 / 32)
+    assert weights[1] == pytest.approx(2 * 0.90 / 32)  # 2 idle verified RTX 4090s of a 32-unit target
+    assert weights[0] == pytest.approx(1 - 2 * 0.90 / 32)
 
     by_key = validator.miners
     honest = by_key[nodes["honest_key"].ss58_address]
@@ -217,7 +217,7 @@ async def test_fees_reserve_and_probation(tmp_path):
                                  fee_address=fee_address, fee_start_block=90)
         validator = Validator(VALIDATOR, chain, config)
         weights = await validator.run_round()
-        unit = 0.80 / 32
+        unit = 0.90 / 32
         # In probation nobody earns idle pay yet; everything goes to the reserve.
         assert weights == pytest.approx({4: 1.0})
         assert chain.scanned == [(90, 100)]
@@ -289,7 +289,7 @@ async def test_made_up_gpu_uuid_is_not_counted(tmp_path, monkeypatch):
         weights = await validator.run_round()
         gpus_seen = validator.miners[faker_key.ss58_address].gpus
         assert gpus_seen["GPU-wei-0000"].code == "BAD_GPU_ID" and gpus_seen["GPU-wei-0000"].weight == 0
-        assert weights[1] == pytest.approx(1 * 0.80 / 32)  # only the real card earns
+        assert weights[1] == pytest.approx(1 * 0.90 / 32)  # only the real card earns
         sellable = json.loads((tmp_path / "sellable.json").read_text())["nodes"]
         assert "GPU-wei-0000" not in sellable[0]["verified_gpus"] and len(sellable[0]["verified_gpus"]) == 1
     finally:

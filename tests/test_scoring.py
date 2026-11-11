@@ -4,7 +4,7 @@ from weir_subnet.validator import codes
 from weir_subnet.validator.scoring import PROBATION_SECONDS, GpuRecord, MinerRecord, NodeRecord, Policy, RentalStats, compute_weights
 
 NOW = 1_000_000.0
-IDLE_UNIT = 0.80 / 32  # one idle 4090 (weight 1.0) with target capacity 32
+IDLE_UNIT = 0.90 / 32  # one idle 4090 (weight 1.0) with target capacity 32
 CAPS = {"rtx4090-24g": 1.0, "h100-80g": 1.4}
 
 
@@ -38,20 +38,20 @@ def test_no_verified_supply_means_all_to_the_reserve():
 
 def test_full_idle_supply_fills_the_idle_pool_and_unused_rented_pool_goes_to_the_reserve():
     weights, _ = weigh([miner(1, gpus=16), miner(2, gpus=16)], {}, owner_uid=0, target_capacity=32, now=NOW)
-    assert weights[1] == pytest.approx(0.40) and weights[2] == pytest.approx(0.40)
-    assert weights[0] == pytest.approx(0.20)
+    assert weights[1] == pytest.approx(0.45) and weights[2] == pytest.approx(0.45)
+    assert weights[0] == pytest.approx(0.10)
 
 
-def test_rented_pool_is_20_percent_split_by_hours():
+def test_rented_pool_is_10_percent_split_by_hours():
     rentals = {"hk1": RentalStats(300.0, 1.0), "hk2": RentalStats(100.0, 1.0)}
     weights, detail = weigh([miner(1, gpus=16), miner(2, gpus=16)], rentals, owner_uid=0, target_capacity=32, now=NOW)
-    assert detail["hk1"]["rented"] == pytest.approx(0.15) and detail["hk2"]["rented"] == pytest.approx(0.05)
+    assert detail["hk1"]["rented"] == pytest.approx(0.075) and detail["hk2"]["rented"] == pytest.approx(0.025)
     assert 0 not in weights and sum(weights.values()) == pytest.approx(1.0)
 
 
 def test_renting_to_yourself_is_worth_at_most_the_rented_pool():
     weights, _ = weigh([miner(1)], {"hk1": RentalStats(1e6, 1.0)}, owner_uid=0, target_capacity=32, now=NOW)
-    assert weights[1] == pytest.approx(0.20 + IDLE_UNIT)
+    assert weights[1] == pytest.approx(0.10 + IDLE_UNIT)
 
 
 def test_rented_gpus_are_not_idle():
@@ -63,7 +63,7 @@ def test_price_over_cap_gets_no_idle_pay():
     miners = [miner(i, price=0.5) for i in range(1, 10)] + [miner(10, price=2.0)]
     weights, detail = weigh(miners, {"hk10": RentalStats(10.0, 1.0)}, owner_uid=0, target_capacity=32, now=NOW)
     assert detail["hk10"]["nodes"]["main"] == codes.PRICE_OVER_CAP
-    assert detail["hk10"]["idle"] == 0 and detail["hk10"]["rented"] == pytest.approx(0.20)  # rentals still count
+    assert detail["hk10"]["idle"] == 0 and detail["hk10"]["rented"] == pytest.approx(0.10)  # rentals still count
     assert detail["hk1"]["idle"] == pytest.approx(IDLE_UNIT, abs=1e-6)
 
 
@@ -93,12 +93,12 @@ def test_unreachable_or_flaky_node_gets_no_idle_pay():
 
 def test_idle_cap_per_model_shares_the_pay():
     weights, _ = weigh([miner(1, gpus=100, disk=1e5)], {}, owner_uid=0, target_capacity=1000, now=NOW, policy=Policy(idle_cap_gpus=64))
-    assert weights[1] == pytest.approx(64 * 0.80 / 1000)
+    assert weights[1] == pytest.approx(64 * 0.90 / 1000)
 
 
 def test_idle_pool_never_exceeds_its_ceiling():
     weights, _ = weigh([miner(1, gpus=60, disk=1e5)], {}, owner_uid=0, target_capacity=32, now=NOW)
-    assert weights[1] == pytest.approx(0.80) and weights[0] == pytest.approx(0.20)
+    assert weights[1] == pytest.approx(0.90) and weights[0] == pytest.approx(0.10)
 
 
 def test_struck_miner_gets_nothing():
@@ -106,7 +106,7 @@ def test_struck_miner_gets_nothing():
     struck.struck_until = NOW + 10
     weights, _ = weigh([miner(1, gpus=16), struck], {"hk2": RentalStats(500.0, 1.0)}, owner_uid=0, target_capacity=32, now=NOW)
     assert 2 not in weights
-    assert weights[1] == pytest.approx(0.40) and weights[0] == pytest.approx(0.60)
+    assert weights[1] == pytest.approx(0.45) and weights[0] == pytest.approx(0.55)
 
 
 def test_model_without_a_cap_gets_no_idle_pay():
@@ -119,7 +119,7 @@ def test_probation_holds_idle_pay_but_not_rentals():
     for g in m.gpus.values():
         g.verified_since = NOW - PROBATION_SECONDS + 3600  # one hour short
     weights, detail = weigh([m], {"hk1": RentalStats(10.0, 1.0)}, owner_uid=0, target_capacity=32, now=NOW)
-    assert detail["hk1"]["idle"] == 0 and detail["hk1"]["rented"] == pytest.approx(0.20)
+    assert detail["hk1"]["idle"] == 0 and detail["hk1"]["rented"] == pytest.approx(0.10)
     weights, detail = weigh([m], {}, owner_uid=0, target_capacity=32, now=NOW + 3601)
     assert detail["hk1"]["idle"] == pytest.approx(2 * IDLE_UNIT)
 
@@ -151,3 +151,24 @@ def test_gpu_without_its_activation_fee_earns_no_idle_pay():
     next(iter(m.gpus.values())).fee_covered = False
     weights, detail = weigh([m], {}, owner_uid=0, target_capacity=32, now=NOW)
     assert detail["hk1"]["idle"] == pytest.approx(IDLE_UNIT)
+
+
+def test_rented_pool_is_capped_at_the_platform_fee_paid():
+    from weir_subnet.validator.scoring import rented_cap
+
+    # 100 alpha a tempo to miners, alpha at 0.5 TAO, 140 tempos a week.
+    # A miner whose rentals paid 0.5 * 140 * 1 TAO of fee may take 1% a tempo.
+    cap = rented_cap(0.5 * 140 * 1, 0.5, 100.0)
+    assert cap == pytest.approx(0.01)
+    assert rented_cap(None, 0.5, 100.0) == 0 and rented_cap(1.0, 0.0, 100.0) == 0 and rented_cap(1.0, 0.5, 0.0) == 0
+
+    farmer, honest = miner(1), miner(2)
+    rentals = {"hk1": RentalStats(100.0), "hk2": RentalStats(100.0)}
+    weights, detail = compute_weights([farmer, honest], rentals, 0, 32, NOW, Policy(), CAPS, None, {"hk1": 0.001, "hk2": 0.5})
+    # Equal hours would give 5% each; the farmer is held to the fee it paid.
+    assert detail["hk1"]["rented"] == pytest.approx(0.001) and detail["hk2"]["rented"] == pytest.approx(0.05)
+    # What the cap holds back goes to the network fund.
+    assert weights[0] == pytest.approx(1 - sum(w for uid, w in weights.items() if uid != 0))
+    # A hotkey with no known fee gets nothing from the rented pool.
+    _, detail = compute_weights([farmer], rentals, 0, 32, NOW, Policy(), CAPS, None, {})
+    assert detail["hk1"]["rented"] == 0

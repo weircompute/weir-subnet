@@ -35,11 +35,17 @@ class Neuron:
     coldkey: str = ""
 
 
+# Share of a subnet's alpha emission that goes to miners (Yuma: 41%).
+MINER_SHARE = 0.41
+
+
 @dataclass
 class Snapshot:
     block: int
     owner_hotkey: str
     neurons: list[Neuron]
+    alpha_tao: float = 0.0  # pool price: TAO per alpha
+    miner_alpha_per_tempo: float = 0.0  # alpha paid to miners each tempo
 
     @property
     def owner_uid(self) -> int:
@@ -72,7 +78,10 @@ class BittensorChain:
             Neuron(uid, hotkey, axon_address(raw["axons"][uid]), bool(raw["validator_permit"][uid]), raw["coldkeys"][uid])
             for uid, hotkey in enumerate(raw["hotkeys"])
         ]
-        return Snapshot(int(raw["block"]), raw["owner_hotkey"], neurons)
+        alpha_in = int(raw.get("alpha_in") or 0)
+        alpha_tao = int(raw.get("tao_in") or 0) / alpha_in if alpha_in else 0.0
+        miner_alpha = int(raw.get("alpha_out_emission") or 0) / 1e9 * int(raw.get("tempo") or 0) * MINER_SHARE
+        return Snapshot(int(raw["block"]), raw["owner_hotkey"], neurons, alpha_tao, miner_alpha)
 
     def set_weights(self, weights: dict[int, float]) -> None:
         # Picks plain or commit-reveal on its own, and raises on failure.

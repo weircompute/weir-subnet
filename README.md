@@ -101,8 +101,8 @@ Every weight-setting round, the miner share of emissions is split three ways:
 
 | Pool | Share | Who gets it |
 | --- | --- | --- |
-| Rented | 20% | GPUs rented on Weir, by settled GPU-hours × card weight |
-| Idle | up to 80% | Verified GPUs waiting for a renter: card weight × 80% ÷ 1134 each, until the pool is full |
+| Rented | 10% | GPUs rented on Weir, by GPU-hours actually used × card weight. Rentals under 10 minutes don't count, and a miner gets at most the platform fee its rentals paid |
+| Idle | up to 90% | Verified GPUs waiting for a renter: card weight × 90% ÷ 1134 each, until the pool is full |
 | Network fund | what is left | The reserve hotkey (below) |
 
 On top of emissions, **rent goes to you**: what the renter paid, minus refunds and Weir's 5% fee. It becomes payable 48 hours after the rental ends and is sent weekly in USDT or USDC once it reaches $5.
@@ -165,7 +165,7 @@ weir-validator --wallet validator --hotkey default \
     --platform-file <platform file> --rentals-file <rentals file> --reserve-hotkey <hotkey>
 ```
 
-The platform file holds the price cap for each card. The rentals file holds settled GPU-hours and delivery rates per hotkey. Both are written by the Weir platform. The validator writes the list of verified GPUs that Weir is allowed to sell.
+The platform file holds the price cap for each card. The rentals file holds, per hotkey, the GPU-hours tenants actually used, the delivery rate, and the platform fee those rentals paid, which caps the rented pool. Both are written by the Weir platform. The validator writes the list of verified GPUs that Weir is allowed to sell.
 
 ---
 
