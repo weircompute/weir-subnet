@@ -2,12 +2,7 @@
 
 Weir is a GPU rental marketplace on Bittensor. Miners bring GPU machines, validators check that the cards are real and fast, and renters on [weircompute.com](https://weircompute.com) rent them by the hour.
 
-This repo has both sides:
-
-| Program | Who runs it | What it does |
-| --- | --- | --- |
-| `weir-node` | Miners | Answers GPU checks and starts rental containers on your machine |
-| `weir-validator` | Validators | Checks every listed GPU and sets weights |
+This repository contains the Weir miner agent.
 
 **At a glance**
 
@@ -42,19 +37,19 @@ curl -fsSL -o sysbox.deb https://github.com/nestybox/sysbox/releases/download/v0
 sudo apt-get install -y ./sysbox.deb
 
 # 3. weir-node
-git clone https://github.com/weircompute/weir-subnet && cd weir-subnet
+git clone https://github.com/weircompute/weir-subnet.git
+cd weir-subnet
 python3 -m venv .venv && .venv/bin/pip install -e '.[gpu]'
 
-# 4. Self-test: the same GPU check the validator runs
+# 4. Local hardware diagnostics
 .venv/bin/weir-node selftest --payout-address <USDT/USDC address>
 
-# 5. Run, then publish your address on chain
+# 5. Run and register your control endpoint with Weir support
 .venv/bin/weir-node run --wallet miner --hotkey default --price 0.35 \
-    --public-host <public ip> --payout-address <USDT/USDC address>
-.venv/bin/weir-node announce --wallet miner --hotkey default --ip <public ip> --port 8091
+    --host <control interface IP> --public-host <rental SSH IP> --payout-address <USDT/USDC address>
 
-# 6. See how your machines are doing
-.venv/bin/weir-node status --wallet miner --hotkey default
+# 6. See your rental earnings
+.venv/bin/weir-node summary --wallet miner --hotkey default
 ```
 
 Run step 5 as a systemd service so it comes back after a reboot.
@@ -65,15 +60,13 @@ Run step 5 as a systemd service so it comes back after a reboot.
 > .venv/bin/pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 > ```
 
-### Ports
+### Connection setup
 
-Open the node port (default `8091`) and the renter SSH range (`--ssh-ports`, default `42000-42999`) to the internet.
+Provide your hotkey, machine name and control endpoint to Weir support. Every external miner must run the node agent and pass GPU checks. Control endpoints are registered privately, not announced on chain.
 
-Behind a provider that maps ports (external 30282 → internal 8800, for example), run the node on the internal port and announce the external one. For `--ssh-ports`, use ports that map one to one.
+Bind `--host` to the intended control interface and restrict its port to Weir's authorized validator and platform sources. Renters connect to their assigned SSH ports (`--ssh-ports`, default `42000-42999`).
 
-### More than one machine
-
-Use the same hotkey everywhere and give each machine its own `--name`. On the machine whose address is on chain, add `--fleet main=http://1.2.3.4:8091,box2=http://1.2.3.5:8091`. A machine in the list that doesn't sign with your hotkey is ignored.
+For multiple machines, use the same hotkey, assign each a unique `--name`, and register each endpoint with Weir.
 
 ---
 
@@ -109,7 +102,7 @@ On top of emissions, **rent goes to you**: what the renter paid, minus refunds a
 
 **Card weights:** H100 4.0 · A100 80GB 2.5 · A800 80GB 2.4 · A100 40GB 1.8 · A800 40GB 1.7 · RTX 5090 1.3 · RTX 4090 48GB 1.2 · RTX 4090 1.0
 
-**What an idle GPU needs before it earns:**
+**Requirements for external miners to earn idle rewards:**
 
 - 14 days of passed checks in a row. A missed check, a changed GPU set or a wrong answer starts the count again.
 - Your price between half the cap and the cap for that card.
@@ -117,55 +110,9 @@ On top of emissions, **rent goes to you**: what the renter paid, minus refunds a
 - Sysbox as the container runtime.
 - A node that answers at least half the time.
 
-Weir may review GPUs periodically. A reviewed GPU can earn before its probation ends, or while a check result is disputed; disputed GPUs are not listed for rent.
+External miners must operate the node agent and pass GPU checks.
 
 **Network fund.** The reserve hotkey only receives what the rented and idle pools don't pay out. It pays for standby GPUs that keep popular cards available, renter credits and promotions that bring rentals to miners, and running the network (validators, payments, servers, this code). The more GPUs miners list, the smaller it gets.
-
----
-
-## How a GPU is checked
-
-1. The validator reads the metagraph and calls every node that has an address on chain. Requests and answers are signed with Bittensor hotkeys.
-2. It sends a random seed. The node builds matrices from it, fills about 70% of each card's memory, multiplies them in fp16 and returns a commitment.
-3. The validator picks random rows and recomputes them on its CPU. All cards on a machine are checked at the same time, against a time limit.
-4. A wrong answer zeroes the miner for 24 hours. A slow answer means that card isn't verified this round.
-
-The code is public on purpose. Each check has a new seed and size, and the rows to verify are picked only after the node has committed to its results, so reading the code doesn't help a node that skips the work. A check can't measure memory size exactly; a card sold with less memory than claimed fails its renters, which costs the miner that rent and a 48-hour penalty per order.
-
----
-
-## Status codes
-
-`weir-node status` gives every machine and GPU a code:
-
-| Code | Meaning | What to do |
-| --- | --- | --- |
-| `OK` | Verified and earning | Nothing |
-| `PROBATION` | Passing, within the first 14 days | Wait; the date is shown |
-| `PENDING` | Not checked yet, or its last pass expired | Wait for the next round |
-| `UNREACHABLE` | The validator couldn't reach the node | Check the port and the announced address |
-| `CHALLENGE_SLOW` | Answer came in over the time limit | Check GPU load, clocks and PCIe |
-| `UNKNOWN_MODEL` | Card isn't on the list | Only listed cards earn |
-| `BAD_GPU_ID` | The GPU's UUID isn't one nvidia-smi gives a real card | Run the unmodified `weir-node` |
-| `PRICE_OVER_CAP` | Your price is above the cap | Lower `--price` |
-| `PRICE_UNDER_FLOOR` | Your price is below half the cap | Raise `--price` |
-| `DISK_TOO_SMALL` | Disk under 1.5× VRAM | Add disk |
-| `NO_SYSBOX` | Containers don't run under Sysbox | Install Sysbox, keep `--docker-runtime sysbox-runc` |
-| `DUPLICATE_GPU` | The same GPU shows up under two hotkeys | Run each card under one hotkey only |
-| `RENTED` | A renter is using it | Nothing; it counts toward the rented pool |
-
-`weir-node summary`, `earnings` (add `--csv` for a spreadsheet) and `payouts` show your rent. You only see your own hotkey's data. `--metrics-port 9100` serves Prometheus metrics on 127.0.0.1.
-
----
-
-## Running a validator
-
-```bash
-weir-validator --wallet validator --hotkey default \
-    --platform-file <platform file> --rentals-file <rentals file> --reserve-hotkey <hotkey>
-```
-
-The platform file holds the price cap for each card. The rentals file holds, per hotkey, the GPU-hours tenants actually used, the delivery rate, and the platform fee those rentals paid, which caps the rented pool. Both are written by the Weir platform. The validator writes the list of verified GPUs that Weir is allowed to sell.
 
 ---
 
@@ -178,16 +125,3 @@ The platform file holds the price cap for each card. The rentals file holds, per
 **What if my machine fails a renter?** That rental earns nothing and costs 48 hours of your rented-pool share.
 
 **Where do I ask?** [Telegram](https://t.me/+qmO92A3EUt5hYWMx) or support@weircompute.com.
-
----
-
-## Development
-
-```bash
-pip install -e '.[gpu]' && pytest
-WEIR_DOCKER_TESTS=1 pytest tests/test_docker_runtime.py   # needs Docker
-```
-
-`scripts/localnet_e2e.py` runs the full cycle on a local chain with throwaway keys.
-
-Known limits: the time limits are measured on A800 40GB so far (6.6–7.1 s against 9.4 s). Other cards are scaled by memory bandwidth, with 1.5× extra slack until measured with `selftest --json`. Rental stats are not signed yet.

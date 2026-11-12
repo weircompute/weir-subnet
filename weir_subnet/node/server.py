@@ -167,9 +167,12 @@ class Node:
         if caller.hotkey_ss58 not in allowed:
             self.stats["requests_refused_total"] += 1
             raise web.HTTPForbidden(text="caller is not allowed")
+        request["weir_authorized"] = True
         return caller.hotkey_ss58, body
 
     def reply(self, request: web.Request, data: dict, status: int = 200) -> web.Response:
+        if not request.get("weir_authorized", False):
+            return web.Response(status=404, body=b"", headers={"Cache-Control": "no-store"})
         body = json.dumps(data, separators=(",", ":")).encode()
         signature = sign_response(self.config.hotkey, request.headers.get(NONCE_HEADER, ""), body)
         return web.Response(body=body, status=status, content_type="application/json", headers={RESPONSE_HEADER: signature})
@@ -336,8 +339,6 @@ class Node:
 
     @web.middleware
     async def sign_errors(self, request: web.Request, handler):
-        """Refusals (401, 403, 404, 413...) and unexpected errors are signed like
-        every other answer, so the caller can trust and act on them."""
         try:
             return await handler(request)
         except web.HTTPException as error:

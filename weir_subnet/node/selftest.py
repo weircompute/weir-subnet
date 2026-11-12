@@ -1,12 +1,4 @@
-"""`weir-node selftest`: run the validator's checks on your own machine.
-
-Uses the same challenge, sizes and time limits as the validator, on every
-GPU at the same time, then checks what tenants need: Docker, GPUs inside
-containers, Sysbox, and a payout address. Nothing is sent anywhere.
-
-`--json` prints the measured numbers, which is also how the time limits in
-validator/models.py are calibrated on real cards.
-"""
+"""GPU self-test."""
 
 from __future__ import annotations
 
@@ -20,7 +12,7 @@ import time
 from dataclasses import asdict, dataclass, field
 
 from .. import challenge
-from ..validator.models import classify, time_limit
+from .diagnostics import classify, time_limit
 from . import gpus as gpu_mod
 
 

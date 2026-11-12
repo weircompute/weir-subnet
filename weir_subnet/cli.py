@@ -1,4 +1,4 @@
-"""Command line: `weir-node` for miners, `weir-validator` for validators."""
+"""Miner command line."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def node_main(argv: list[str] | None = None) -> None:
     run = sub.add_parser("run", help="serve the node API")
     _wallet_args(run)
     run.add_argument("--port", type=int, default=8091)
-    run.add_argument("--host", default="0.0.0.0")
+    run.add_argument("--host", default="127.0.0.1", help="control API bind address")
     run.add_argument("--validators", default=network.VALIDATORS, help="comma-separated validator hotkeys allowed to challenge")
     run.add_argument("--platform", default=network.PLATFORM, help="comma-separated hotkeys allowed to manage orders")
     run.add_argument("--price", default="0", help="ask, USD per GPU-hour")
@@ -49,25 +49,18 @@ def node_main(argv: list[str] | None = None) -> None:
     run.add_argument("--payout-address", default="", help="stablecoin address that receives your rent share")
     run.add_argument("--name", default="main", help="this machine's name, if you run several")
     run.add_argument("--metrics-port", type=int, default=0, help="serve Prometheus metrics on 127.0.0.1:<port> (off when 0)")
-    run.add_argument("--fleet", default="", help="on the machine at your chain address: name=url of every machine, comma-separated (include this one)")
+    run.add_argument("--fleet", default="", help="name=url of each machine, comma-separated")
 
-    announce = sub.add_parser("announce", help="publish this node's address on chain (hotkey-signed)")
-    _wallet_args(announce)
-    announce.add_argument("--network", default=network.NETWORK)
-    announce.add_argument("--netuid", type=int, default=network.NETUID)
-    announce.add_argument("--ip", required=True)
-    announce.add_argument("--port", type=int, default=8091)
-
-    selftest = sub.add_parser("selftest", help="run the validator's checks on this machine")
+    selftest = sub.add_parser("selftest", help="run local hardware diagnostics")
     selftest.add_argument("--simulate", default="", help='development only, e.g. "RTX 4090:24564:2"')
-    selftest.add_argument("--n", type=int, default=8192, help="matrix size (the validator uses 8192)")
+    selftest.add_argument("--n", type=int, default=8192, help="local diagnostic matrix size")
     selftest.add_argument("--image", default="nvidia/cuda:12.4.1-runtime-ubuntu22.04", help="a tenant image to check GPUs inside a container")
     selftest.add_argument("--docker-runtime", default="", help='runtime to check, default "sysbox-runc"')
     selftest.add_argument("--payout-address", default="")
     selftest.add_argument("--json", action="store_true", help="print measured numbers (used to calibrate time limits)")
 
     for name, text in (("summary", "balance, payable amount, payout address"), ("earnings", "statement of every earning, penalty and payout"),
-                       ("payouts", "payouts and their transaction hashes"), ("status", "why each machine and GPU is or is not sold"),
+                       ("payouts", "payouts and their transaction hashes"),
                        ("quote", "current activation fees and price limits, held for this hotkey for 7 days")):
         cmd = sub.add_parser(name, help=text)
         _wallet_args(cmd)
@@ -89,19 +82,8 @@ def node_main(argv: list[str] | None = None) -> None:
         print(st.report(checks, args.json))
         raise SystemExit(1 if any(c.result == "FAIL" for c in checks) else 0)
 
-    if args.command in ("summary", "earnings", "payouts", "status", "quote"):
+    if args.command in ("summary", "earnings", "payouts", "quote"):
         print(asyncio.run(_miner_report(args)))
-        return
-
-    if args.command == "announce":
-        import bittensor as bt
-
-        from .protocol import AGENT_VERSION
-
-        wallet = bt.Wallet(name=args.wallet, hotkey=args.hotkey, path=args.wallet_path)
-        version = int("".join(f"{int(p):02d}" for p in AGENT_VERSION.split(".")))
-        result = bt.Subtensor(args.network).execute(bt.ServeAxon(netuid=args.netuid, ip=args.ip, port=args.port, version=version), wallet)
-        print("published" if result.success else f"failed: {result.error.code} {result.error.remediation}")
         return
 
     from aiohttp import web
@@ -161,8 +143,6 @@ async def _miner_report(args) -> str:
     import aiohttp
     import bittensor as bt
 
-    from .validator.codes import EXPLAIN
-
     path = f"/v1/miner/{args.command}" + ("?format=csv" if getattr(args, "csv", False) else "")
     headers = bt.http_auth.sign(_hotkey(args), method="GET", path=path, receiver_ss58=args.platform)
     async with aiohttp.ClientSession() as session:
@@ -172,24 +152,7 @@ async def _miner_report(args) -> str:
                 raise SystemExit(f"platform refused ({response.status}): {text}")
     if args.command == "quote":
         return _quote_text(json.loads(text))
-    if args.command != "status":
-        return text if getattr(args, "csv", False) else json.dumps(json.loads(text), indent=1)
-    miner = json.loads(text).get("miner")
-    if not miner:
-        return "The validator has no record of this hotkey yet."
-    lines = [f"Activation credit: {miner.get('activation_credit_tao', 0)} TAO"]
-    fees = miner.get("activation_fees_tao") or {}
-    if fees:
-        lines.append("Activation fee per GPU: " + ", ".join(f"{k} {v} TAO" for k, v in fees.items()))
-    for node in miner.get("nodes", []):
-        lines.append(f"{node['name']}: {node['code']} - {EXPLAIN.get(node['code'], '')} {node.get('detail') or ''}".rstrip())
-        for gpu in node.get("gpus", []):
-            detail = ", ".join(x for x in (gpu.get("reason"), gpu.get("detail")) if x)
-            detail = f" ({detail})" if detail else ""
-            lines.append(f"  GPU {gpu['index']} {gpu.get('model') or '?'}: {gpu['code']} - {EXPLAIN.get(gpu['code'], '')}{detail}")
-    for entry in miner.get("disputed", []):
-        lines.append(f"Under review: {entry['count']} x {entry['model']} ({entry['activated']} activated): {entry['code']} - {EXPLAIN.get(entry['code'], '')}")
-    return "\n".join(lines)
+    return text if getattr(args, "csv", False) else json.dumps(json.loads(text), indent=1)
 
 
 def _quote_text(quote: dict) -> str:
@@ -205,54 +168,3 @@ def _quote_text(quote: dict) -> str:
         lines.append("GPUs this hotkey activates before then pay at most these fees.")
     lines.append(f"Pay from this hotkey's coldkey to {quote.get('feeAddress')}.")
     return "\n".join(lines)
-
-
-def validator_main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="weir-validator")
-    _wallet_args(parser)
-    parser.add_argument("--network", default=network.NETWORK)
-    parser.add_argument("--netuid", type=int, default=network.NETUID)
-    parser.add_argument("--state-file", default="/var/lib/weir-validator/state.json")
-    parser.add_argument("--summary-file", default="/var/lib/weir-validator/summary.json")
-    parser.add_argument("--rentals-file", default="", help="settled rental stats from the platform")
-    parser.add_argument("--sellable-file", default="/var/lib/weir-validator/sellable.json", help="verified nodes for the platform")
-    parser.add_argument("--status-file", default="/var/lib/weir-validator/status.json", help="reason codes per node and GPU, for miners")
-    parser.add_argument("--round-seconds", type=float, default=300)
-    parser.add_argument("--weights-every", type=float, default=1200)
-    parser.add_argument("--target-capacity", type=float, default=1134.0, help="idle weighted GPUs that fill the idle pool")
-    parser.add_argument("--idle-cap-gpus", type=int, default=64, help="idle GPUs per model paid in full")
-    parser.add_argument("--probation-days", type=float, default=14.0, help="days of passes without a gap before idle pay starts")
-    parser.add_argument("--platform-file", default="", help="price caps, per-model weight and fee overrides, and activation credit paid through the platform")
-    parser.add_argument("--reserve-hotkey", default="", help="receives what the pools leave (default: the owner UID)")
-    parser.add_argument("--fee-address", default=network.FEE_ADDRESS, help="coldkey that receives activation fees (empty: no fee)")
-    parser.add_argument("--fee-start-block", type=int, default=0, help="first block to read fees from (older blocks need an archive endpoint)")
-    parser.add_argument("--dev-no-idle-gates", action="store_true", help="development only: skip the Sysbox and disk gates")
-    parser.add_argument("--challenge-n", type=int, default=0, help="fixed matrix size; default varies 6144-8192")
-    parser.add_argument("--dev-timing-off", action="store_true", help="development only: accept simulated GPUs")
-    parser.add_argument("--once", action="store_true", help="run one round and set weights, then exit")
-    args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-    from .validator.chain import BittensorChain
-    from .validator.validator import Validator, ValidatorConfig
-    from .validator.scoring import Policy
-
-    chain = BittensorChain(args.network, args.netuid, args.wallet, args.hotkey, args.wallet_path)
-    config = ValidatorConfig(
-        state_file=Path(args.state_file), summary_file=Path(args.summary_file),
-        rentals_file=Path(args.rentals_file) if args.rentals_file else None,
-        sellable_file=Path(args.sellable_file) if args.sellable_file else None,
-        status_file=Path(args.status_file) if args.status_file else None,
-        weights_every=0 if args.once else args.weights_every, target_capacity=args.target_capacity,
-        platform_file=Path(args.platform_file) if args.platform_file else None,
-        reserve_hotkey=args.reserve_hotkey,
-        fee_address=args.fee_address, fee_start_block=args.fee_start_block,
-        challenge_n=args.challenge_n, timing=not args.dev_timing_off,
-        policy=Policy(idle_cap_gpus=args.idle_cap_gpus, probation_seconds=args.probation_days * 86400,
-                      require_sysbox=not args.dev_no_idle_gates, min_disk_ratio=0 if args.dev_no_idle_gates else 1.5),
-    )
-    validator = Validator(_hotkey(args), chain, config)
-    if args.once:
-        print(asyncio.run(validator.run_round()))
-    else:
-        asyncio.run(validator.run_forever(args.round_seconds))
