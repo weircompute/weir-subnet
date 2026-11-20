@@ -13,7 +13,7 @@ This repository contains the Weir miner agent.
 | Platform hotkey | `5ERf3azzYiJEdUdgufdM9bnz4UU94igLh362gBSBXWVdJehe` |
 | Cards that earn | H100 80GB · A100 80/40GB · A800 80/40GB · RTX 5090 · RTX 4090 48GB · RTX 4090 |
 | Rent is paid in | USDT or USDC, weekly |
-| Questions | [Telegram](https://t.me/+qmO92A3EUt5hYWMx) · support@weircompute.com |
+| Questions | support@weircompute.com |
 
 `weir-node` already knows these values (`weir_subnet/network.py`), so you don't type them.
 
@@ -124,4 +124,4 @@ External miners must operate the node agent and pass GPU checks.
 
 **What if my machine fails a renter?** That rental earns nothing and costs 48 hours of your rented-pool share.
 
-**Where do I ask?** [Telegram](https://t.me/+qmO92A3EUt5hYWMx) or support@weircompute.com.
+**Where do I ask?** support@weircompute.com.
